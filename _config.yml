@@ -3,7 +3,8 @@ description: "Liora Milbaum's blog"
 author:
   name: "Liora Milbaum"
   email: "liora@lmb.co.il"
- baseurl: /
+
+baseurl: /
 
 source: .
 destination: ./_site
