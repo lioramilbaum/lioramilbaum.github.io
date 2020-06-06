@@ -1,2 +1,7 @@
 title: Liora Milbaum's blog
+description: "Liora Milbaum's blog"
+author:
+  name: "Liora Milbaum"
+  email: "liora@lmb.co.il"
+  
 remote_theme: tocttou/hacker-blog
