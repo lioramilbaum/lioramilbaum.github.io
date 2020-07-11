@@ -12,7 +12,7 @@ tags:
 
 While I was working on <a href="https://github.com/devopsloft/devopsloft/pull/430">Pull Request</a>, I had to make sure it was also working on Windows.
 
-What is the connection between me and Windows? In short, nothing.</br>
+What is the connection between me and Windows? In short, nothing.<br />
 And not for short, nothing at all.
 
 Luckily my Loft co-leader has strong conntection with Windows. Without further due, he was chosen for the task.
