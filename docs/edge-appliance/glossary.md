@@ -166,3 +166,46 @@ For an air-gapped Target Environment, each Deployment Dependency must either be 
 The property that all Deployment Dependencies required by a Product Version are either carried by the Product Package or are explicitly guaranteed by the Target Environment.
 
 This property allows the Product Package to be self-contained without requiring the product architecture to become monolithic.
+
+## Artifact
+
+An immutable or versioned file, image, archive, manifest, model, or other unit of content produced or consumed by a software delivery process.
+
+Artifacts form the concrete content of a Layer Version or Product Package. Their storage format and repository technology are implementation choices.
+
+## Artifact Variant
+
+One of several concrete artifacts that represent the same logical capability for different target characteristics.
+
+Variants may differ by CPU architecture, operating system, accelerator, or another compatibility dimension. Each variant must remain explicitly identifiable so that deployment selects the artifact validated for the Target Environment.
+
+## Content Digest
+
+A cryptographic hash calculated from an artifact's content and used as an immutable identifier for those exact bytes.
+
+A Content Digest allows a Product Package to distinguish a validated artifact from another artifact carrying the same human-readable name or version tag.
+
+## Source Provenance
+
+Verifiable information about the origin and production history of an artifact.
+
+Source Provenance may identify the source repository and revision, the build process, inputs, transformations, and the relationship between source material and the resulting artifact.
+
+## Digital Signature
+
+A cryptographic mechanism used to verify the authenticity and integrity of signed content or metadata.
+
+Within the product delivery process, Digital Signatures can establish who signed a Layer Version or Product Package and whether the signed material has changed.
+
+## Software Bill of Materials (SBOM)
+
+A machine-readable inventory of the software components and dependencies associated with an artifact, Layer Version, or Product Version.
+
+An SBOM supports security analysis, license review, vulnerability management, and supply-chain traceability. Its scope and relationship to the artifacts it describes must be explicit.
+
+## Artifact Repository
+
+A system used to store, identify, retrieve, and distribute versioned artifacts.
+
+An Artifact Repository may store container images, packages, archives, models, or other content. The repository location is separate from the logical identity of the Layer Version or Product Version that uses the artifacts.
+
