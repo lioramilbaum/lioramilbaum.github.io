@@ -209,3 +209,15 @@ A system used to store, identify, retrieve, and distribute versioned artifacts.
 
 An Artifact Repository may store container images, packages, archives, models, or other content. The repository location is separate from the logical identity of the Layer Version or Product Version that uses the artifacts.
 
+## End-to-End Verification
+
+A validation process that exercises a deliverable across the complete path being claimed, from its defined input or versioned artifact to an observable result in the Target Environment.
+
+The verified scope must be explicit. If a workflow validates only one transport, repository, deployment target, or lifecycle operation, it does not provide evidence for paths it did not execute.
+
+## Verification Evidence
+
+Machine-readable or inspectable records produced by a verification process and retained to support a specific technical claim.
+
+Verification Evidence may include signature results, content digests, test reports, deployment status, logs, packet captures, or other records. Its value depends on a clear relationship between the evidence, the exact version tested, and the conditions under which verification ran.
+
