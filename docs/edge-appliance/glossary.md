@@ -166,3 +166,88 @@ For an air-gapped Target Environment, each Deployment Dependency must either be 
 The property that all Deployment Dependencies required by a Product Version are either carried by the Product Package or are explicitly guaranteed by the Target Environment.
 
 This property allows the Product Package to be self-contained without requiring the product architecture to become monolithic.
+
+## Open Component Model (OCM)
+
+A technology-neutral model for describing, signing, transporting, and consuming software components and their relationships.
+
+In this architecture, OCM is one possible implementation of the Product Package and Layer Package concepts. It does not replace the architectural ownership boundaries.
+
+## OCM Component
+
+A named software delivery unit that groups related sources, resources, references, and metadata under one identity.
+
+A Layer can be represented as an OCM Component without merging its ownership or lifecycle with other Layers.
+
+## Component Version
+
+An immutable versioned snapshot of an OCM Component.
+
+In the current implementation mapping, a Layer Version is represented by a Component Version. A Product Version can also be represented by a Component Version that references the selected Layer Component Versions.
+
+## Component Constructor
+
+A build-time definition used to create an OCM Component Version.
+
+It declares the intended component identity, sources, resources, references, and metadata. The constructor is an input to the build and is not the canonical description of the resulting Component Version.
+
+## Component Descriptor
+
+The canonical metadata document generated for an OCM Component Version.
+
+It records the component identity and the sources, resources, component references, digests, access information, and other metadata that belong to that version.
+
+## OCM Resource
+
+A versioned artifact declared as part of an OCM Component Version.
+
+In the Application Layer implementation, resources include OCI images, Kubernetes manifests, localization data, configuration data, an SBOM, and the deploy bundle.
+
+## OCM Source
+
+A source-code origin recorded in an OCM Component Version.
+
+A source record can identify the repository and exact commit from which the component was produced, preserving provenance without treating source code as a deployable resource.
+
+## Component Reference
+
+A typed relationship from one OCM Component Version to another.
+
+A Product Component Version can use Component References to identify the selected Layer Component Versions without copying their resources into the Product Component.
+
+## Resource Identity
+
+The identity of an OCM Resource within a Component Version.
+
+The resource name forms the base identity. Extra identity attributes distinguish variants of the same logical resource, such as `architecture: amd64` and `architecture: arm64`.
+
+## Common Transport Format (CTF)
+
+An OCM transport format that stores Component Versions and their content in a portable filesystem archive.
+
+A CTF can be used as an offline delivery or transfer unit without changing the identity of the Component Versions it contains.
+
+## OCM Repository
+
+A storage location from which OCM Component Versions can be resolved and to which they can be transferred.
+
+An OCI registry can serve as an OCM Repository. Moving a Component Version between a CTF and an OCI-backed repository changes its location, not its component identity.
+
+## Access Specification
+
+Metadata that tells an OCM consumer how to access a source or resource at its current location.
+
+Access Specifications may change when content is transferred between repositories. They are separate from the stable identity and integrity of the content.
+
+## Localization Rule
+
+A controlled instruction that adapts a packaged artifact for a Target Environment without changing the Layer Version's ownership boundary.
+
+In the Application Layer implementation, the signed Localization Rule specifies where the selected, digest-pinned image reference may be inserted into the Kubernetes manifest.
+
+## Software Bill of Materials (SBOM)
+
+A machine-readable inventory describing the software components and dependencies associated with an artifact or release.
+
+In the Application Layer implementation, the SBOM is an OCM Resource whose signed metadata identifies the application resources it describes.
+
