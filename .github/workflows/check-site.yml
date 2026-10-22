@@ -51,11 +51,8 @@ jobs:
           test -f _site/docs/edge-appliance/glossary.html \
             || fail "glossary page was not built"
 
-          section "AI" | grep -q 'href="https://github.com/lmilbaum/projectmesh"' \
+          section "AI" | grep -q 'href="https://github.com/lioramilbaum/projectmesh"' \
             || fail "projectmesh link missing from AI"
-
-          section "Open Source" | grep -q 'href="https://github.com/lmilbaum/projectmesh"' \
-            || fail "projectmesh link missing from Open Source"
 
           if grep -Eq 'href="[^"]*\.md"' "$page"; then
             fail "unrewritten .md link on homepage (jekyll-relative-links)"

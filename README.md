@@ -17,8 +17,8 @@ _Coming soon._
 
 ## AI
 
-- [projectmesh](https://github.com/lmilbaum/projectmesh): a Python CLI that assesses a feature request against an existing local repository, without modifying it, and writes a Markdown report on feature fit and likely implementation impact, using any OpenAI-compatible endpoint or the Claude Code CLI.
+- [projectmesh](https://github.com/lioramilbaum/projectmesh): a Python CLI that assesses a feature request against an existing local repository, without modifying it, and writes a Markdown report on feature fit and likely implementation impact, using any OpenAI-compatible endpoint or the Claude Code CLI.
 
 ## Open Source
 
-- [projectmesh](https://github.com/lmilbaum/projectmesh): a Python CLI that assesses a feature request against an existing local repository, without modifying it, and writes a Markdown report on feature fit and likely implementation impact, using any OpenAI-compatible endpoint or the Claude Code CLI.
+_Coming soon._
