@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page.title }}</title>
+  <meta name="description" content="{{ page.description }}">
+
+  <!-- Open Graph tags -->
+  <meta property="og:title" content="{{ page.title }}">
+  <meta property="og:description" content="{{ page.description }}">
+  {% if page.image %}
+  <meta property="og:image" content="{{ page.image | absolute_url }}">
+  {% endif %}
+  <meta property="og:type" content="website">
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #fff;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #1a1a1a;
+        color: #e0e0e0;
+      }
+    }
+
+    main {
+      max-width: 40rem;
+      margin: 0 auto;
+      padding: 3rem 1.5rem;
+      text-align: left;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-bottom: 2rem;
+      color: #0366d6;
+      text-decoration: none;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .back-link {
+        color: #58a6ff;
+      }
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    .content h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .content h2 {
+      font-size: 1.5rem;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    .content h2:first-child {
+      margin-top: 0;
+    }
+
+    .content ul {
+      padding-left: 1.5rem;
+    }
+
+    .content li {
+      margin-bottom: 0.5rem;
+    }
+
+    .content a {
+      color: #0366d6;
+      text-decoration: none;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .content a {
+        color: #58a6ff;
+      }
+    }
+
+    .content a:hover {
+      text-decoration: underline;
+    }
+
+    .content p {
+      margin-bottom: 1rem;
+    }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid #e1e4e8;
+      font-size: 0.875rem;
+      color: #666;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      footer {
+        border-top-color: #30363d;
+        color: #999;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back-link" href="{{ '/' | relative_url }}">&larr; Home</a>
+
+    <section class="content">
+      {{ content }}
+    </section>
+
+    <footer>&copy; <span id="yr"></span> Liora Milbaum
+<script>document.getElementById('yr').textContent=new Date().getFullYear();</script></footer>
+  </main>
+</body>
+</html>

@@ -1,4 +1,7 @@
 ---
+layout: docs
+title: Edge Appliance Architecture Terminology
+description: "A living reference for terminology used in the Edge Appliance architecture series."
 ---
 
 # Edge Appliance Architecture Terminology

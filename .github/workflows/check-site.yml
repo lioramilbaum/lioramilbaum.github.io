@@ -1,0 +1,64 @@
+name: Check site
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1.0.13
+        with:
+          source: .
+          destination: ./_site
+
+      - name: Check homepage
+        shell: bash
+        run: |
+          set -euo pipefail
+          page=_site/index.html
+          fail() { echo "::error file=README.md::$1"; exit 1; }
+
+          test -f "$page" || fail "homepage was not built at $page"
+
+          for heading in "Platform Engineering" "DevOps" "AI" "Open Source"; do
+            grep -Eq "<h2[^>]*>${heading}</h2>" "$page" \
+              || fail "missing topic section: ## ${heading}"
+          done
+
+          if grep -Eq '<h2[^>]*>Documentation</h2>' "$page"; then
+            fail "legacy '## Documentation' section should be replaced by topic sections"
+          fi
+
+          section() { sed -n "/<h2[^>]*>$1<\/h2>/,/<h2/p" "$page"; }
+
+          section "Platform Engineering" | grep -q 'href="/docs/edge-appliance/glossary.html"' \
+            || fail "Edge Appliance glossary link missing from Platform Engineering"
+          test -f _site/docs/edge-appliance/glossary.html \
+            || fail "glossary page was not built"
+
+          section "AI" | grep -q 'href="https://github.com/lmilbaum/projectmesh"' \
+            || fail "projectmesh link missing from AI"
+
+          section "Open Source" | grep -q 'href="https://github.com/lmilbaum/projectmesh"' \
+            || fail "projectmesh link missing from Open Source"
+
+          if grep -Eq 'href="[^"]*\.md"' "$page"; then
+            fail "unrewritten .md link on homepage (jekyll-relative-links)"
+          fi
+
+          echo "Homepage checks passed"
