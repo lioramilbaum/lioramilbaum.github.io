@@ -61,4 +61,11 @@ jobs:
             fail "unrewritten .md link on homepage (jekyll-relative-links)"
           fi
 
+          test -f _site/favicon.ico || fail "favicon.ico was not built"
+          test -f _site/assets/images/favicon.svg || fail "favicon.svg was not built"
+          test -f _site/assets/images/apple-touch-icon.png || fail "apple-touch-icon.png was not built"
+          for p in "$page" _site/docs/edge-appliance/glossary.html; do
+            grep -q 'rel="icon"' "$p" || fail "favicon link missing from $p"
+          done
+
           echo "Homepage checks passed"
