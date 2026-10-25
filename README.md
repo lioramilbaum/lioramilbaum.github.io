@@ -2,7 +2,7 @@
 title: Liora Milbaum
 permalink: /
 layout: home
-description: "Software engineer working on edge computing, platform engineering and open source."
+description: "Platform Engineering Architect | DevOps | Efficiency Engineering | Mentor | Community lead | Founder"
 ---
 
 Welcome! This is my home for the topics I'm investing in: platform engineering, DevOps, AI and open source. Find me on the links above.
