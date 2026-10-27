@@ -169,3 +169,100 @@ For an air-gapped Target Environment, each Deployment Dependency must either be 
 The property that all Deployment Dependencies required by a Product Version are either carried by the Product Package or are explicitly guaranteed by the Target Environment.
 
 This property allows the Product Package to be self-contained without requiring the product architecture to become monolithic.
+
+## Artifact
+
+An immutable or versioned file, image, archive, manifest, model, or other unit of content produced or consumed by a software delivery process.
+
+Artifacts form the concrete content of a Layer Version or Product Package. Their storage format and repository technology are implementation choices.
+
+## Artifact Variant
+
+One of several concrete artifacts that represent the same logical capability for different target characteristics.
+
+Variants may differ by CPU architecture, operating system, accelerator, or another compatibility dimension. Each variant must remain explicitly identifiable so that deployment selects the artifact validated for the Target Environment.
+
+## Content Digest
+
+A cryptographic hash calculated from an artifact's content and used as an immutable identifier for those exact bytes.
+
+A Content Digest allows a Product Package to distinguish a validated artifact from another artifact carrying the same human-readable name or version tag.
+
+## Source Provenance
+
+Verifiable information about the origin and production history of an artifact.
+
+Source Provenance may identify the source repository and revision, the build process, inputs, transformations, and the relationship between source material and the resulting artifact.
+
+## Digital Signature
+
+A cryptographic mechanism used to verify the authenticity and integrity of signed content or metadata.
+
+Within the product delivery process, Digital Signatures can establish who signed a Layer Version or Product Package and whether the signed material has changed.
+
+## Software Bill of Materials (SBOM)
+
+A machine-readable inventory of the software components and dependencies associated with an artifact, Layer Version, or Product Version.
+
+An SBOM supports security analysis, license review, vulnerability management, and supply-chain traceability. Its scope and relationship to the artifacts it describes must be explicit.
+
+## Artifact Repository
+
+A system used to store, identify, retrieve, and distribute versioned artifacts.
+
+An Artifact Repository may store container images, packages, archives, models, or other content. The repository location is separate from the logical identity of the Layer Version or Product Version that uses the artifacts.
+
+## End-to-End Verification
+
+A validation process that exercises a deliverable across the complete path being claimed, from its defined input or versioned artifact to an observable result in the Target Environment.
+
+The verified scope must be explicit. If a workflow validates only one transport, repository, deployment target, or lifecycle operation, it does not provide evidence for paths it did not execute.
+
+## Verification Evidence
+
+Machine-readable or inspectable records produced by a verification process and retained to support a specific technical claim.
+
+Verification Evidence may include signature results, content digests, test reports, deployment status, logs, packet captures, or other records. Its value depends on a clear relationship between the evidence, the exact version tested, and the conditions under which verification ran.
+
+
+## Artifact Identity
+
+A stable, location-independent identity used to refer to an artifact across repositories, transfers, and deployment environments.
+
+Artifact Identity remains unchanged when the artifact's storage location or access method changes. It must identify the exact logical artifact expected by a Layer Version or Product Version.
+
+## Artifact Access Information
+
+The location and method used to retrieve an artifact from a particular repository or delivery medium.
+
+Artifact Access Information may change as an artifact is promoted, transferred, mirrored, or moved into an air-gapped environment. A change in access information does not by itself change the artifact's identity.
+
+## Repository Resolution
+
+The process of locating a versioned artifact or deliverable and discovering the dependencies associated with it.
+
+Repository Resolution translates stable identities and version selections into concrete access information without making repository location part of the architectural identity.
+
+## Transfer
+
+The movement of a versioned deliverable and its required artifacts between repositories or delivery media while preserving their identity and integrity.
+
+Transfer may copy content, preserve selected external references, or transform repository-specific access information according to an explicit policy.
+
+## Localization
+
+The adaptation of artifact references or deployment inputs for a specific Target Environment after or during delivery.
+
+Localization changes how content is accessed or consumed in that environment. It must not silently change the identity or validated meaning of the Layer Version or Product Version being deployed.
+
+## Trust Policy
+
+An explicit set of rules that determines which identities, signatures, evidence, and verification outcomes are accepted for a Layer Version or Product Version.
+
+A Trust Policy defines who is trusted to sign or produce content, which dependencies must be verified, what evidence is required, and what happens when verification fails.
+
+## Lifecycle Handoff
+
+The contract between product-level orchestration, a Layer Lifecycle Engine, and the runtime that invokes it.
+
+A Lifecycle Handoff defines the requested operation, target context, inputs, ordering constraints, observable state, outputs, and failure reporting without transferring ownership of the Layer's lifecycle implementation.
