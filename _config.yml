@@ -20,3 +20,5 @@ exclude:
   # custom domain comes from the repo's Pages settings.
   - CNAME
   - scripts/
+  - AGENTS.md
+  - renovate.json
