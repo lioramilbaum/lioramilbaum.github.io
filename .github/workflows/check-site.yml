@@ -29,3 +29,26 @@ jobs:
       - name: Check site
         shell: bash
         run: bash scripts/check-site.sh _site
+
+  delivery-doc:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit and its first parent (the base branch tip).
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Test delivery check
+        # Tests the checker itself, so it runs on Renovate PRs too.
+        shell: bash
+        run: bash scripts/test-check-delivery.sh
+
+      - name: Check delivery doc
+        # Renovate PRs automerge once checks pass and carry no delivery doc.
+        if: github.event.pull_request.user.login != 'renovate[bot]'
+        shell: bash
+        run: bash scripts/check-delivery.sh HEAD^1 HEAD
