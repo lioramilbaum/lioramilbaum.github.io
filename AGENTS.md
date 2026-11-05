@@ -9,7 +9,7 @@ Personal portfolio site for Liora Milbaum, hosted at [lioramilbaum.com](https://
 
 ## Setup
 
-Requires Docker only. No GitHub token or network access is needed: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon).
+The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access.
 
 ## Verify
 
@@ -22,6 +22,15 @@ bash scripts/check-site.sh _site
 
 # Preview (absolute URLs such as og:image point at production — expected)
 python3 -m http.server --directory _site 4000
+
+# Screenshot the live site (Docker and network needed; writes _snapshots/)
+scripts/snapshot-site.sh [URL] [DIR]
+
+# Screenshot the local preview from the Preview step above (Docker and network needed)
+scripts/snapshot-site.sh http://host.docker.internal:4000 _snapshots
+
+# Download a deploy's snapshots (for a PR, use -n site-preview-<sha7> instead)
+gh run download <run-id> -R lioramilbaum/lioramilbaum.github.io -n site-snapshots-<sha7> -D _snapshots
 
 # Check this branch has a delivery doc (rule 6; commit it first)
 bash scripts/check-delivery.sh upstream/main HEAD
@@ -74,7 +83,7 @@ Keep the four `##` topic sections with exactly these names: **Platform Engineeri
 
 **Where:** `.github/workflows/*.yml`, `renovate.json`
 
-Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
+Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). The Playwright image in `scripts/snapshot-site.sh` is tracked by the regex in `renovate.json`; keep its `image="…:vX.Y.Z-noble@sha256:…"` form. Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
 
 *Why:* A site about supply-chain integrity should practice what it describes. Pinning by SHA prevents silent tag moves.
 
@@ -85,6 +94,16 @@ Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/bui
 Every PR adds or updates one `deliveries/<YYYY-MM-DD>-<slug>.md`, copied from `deliveries/TEMPLATE.md`: the date the PR opens, and the branch name without its type prefix (`feat/site-snapshots` → `2026-11-05-site-snapshots.md`). Write it for hackathon readers and other builders, not for agents. Fill "What I learned from the Qodo review" only from real `qodo-code-review[bot]` output; until Qodo has reviewed the PR (Qodo has only reviewed PRs after they leave draft), keep the `TODO(qodo)` marker, which CI flags as a warning. Copy findings into the doc before fixing them: Qodo rewrites its comment to "no open findings" once they are resolved. Never post to the hackathon discussions; the owner does. Renovate PRs are exempt.
 
 *Why:* Each PR is a delivery in the Qodo Software Factory hackathon, and the doc is the evidence posted to the daily discussion. CI fails a PR without one.
+
+### 7. Snapshots are artifacts; the screenshots branch is frozen
+
+**Where:** `.github/workflows/deploy-pages.yml` (`snapshot` job), `.github/workflows/check-site.yml`, the `screenshots` branch
+
+After each deploy, the `snapshot` job uploads desktop and phone PNGs of the live homepage as the `site-snapshots-<sha7>` artifact (kept 90 days). Every PR uploads `site-preview-<sha7>` from the built `_site` (kept 14 days). Nothing is committed to git. Never delete, modify or push to the `screenshots` branch.
+
+The snapshot job runs inside the deploy workflow's `pages` concurrency group, so the next deploy waits for it. This takes up to its 15-minute timeout, usually 1–3 minutes, and this is intentional so that a normal capture matches its commit. A re-run of an older run is guarded by the newest-deployment skip checks, not by the group. The job is `continue-on-error`, so a failed snapshot leaves the deploy run green and shows only as a failed job or annotation.
+
+*Why:* `screenshots` is a frozen baseline whose raw URL (`2026-11-04/desktop.png`) is embedded publicly; changing it breaks that link.
 
 ## Workflow
 
