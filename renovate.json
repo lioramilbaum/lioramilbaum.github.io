@@ -4,6 +4,17 @@
     "github>lioramilbaum/renovate-config"
   ],
   "pinDigests": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Playwright image pinned in scripts/snapshot-site.sh",
+      "managerFilePatterns": ["/^scripts/snapshot-site\\.sh$/"],
+      "matchStrings": [
+        "image=\"(?<depName>mcr\\.microsoft\\.com/playwright):(?<currentValue>v[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "description": "Group all GitHub Actions updates into a single PR",
@@ -14,6 +25,14 @@
     {
       "description": "Automerge non-major GitHub Actions updates once check-site passes",
       "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true,
+      "platformAutomerge": false
+    },
+    {
+      "description": "Automerge non-major Playwright image updates once check-site passes",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["mcr.microsoft.com/playwright"],
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "automerge": true,
       "platformAutomerge": false
