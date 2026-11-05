@@ -20,6 +20,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit and its base-branch parent, for the snapshot script check.
+          fetch-depth: 2
+          persist-credentials: false
 
       - name: Build with Jekyll
         uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
@@ -31,25 +35,26 @@ jobs:
         shell: bash
         run: bash scripts/check-site.sh _site
 
-      - name: Snapshot smoke test
-        id: smoke
+      - name: Install jq
+        # scripts/test-delivery.sh filters its gh stub's output with jq.
         shell: bash
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          python3 -m http.server 4000 --directory _site >/dev/null 2>&1 &
-          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null http://localhost:4000/
-          bash scripts/snapshot-site.sh http://host.docker.internal:4000 "$RUNNER_TEMP/snapshots"
-          echo "short=${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
-      - name: Upload site preview
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: site-preview-${{ steps.smoke.outputs.short }}
-          path: ${{ runner.temp }}/snapshots/
-          if-no-files-found: error
-          retention-days: 14
-          overwrite: true
+      - name: Test delivery scripts
+        # Tests the generator and the check themselves, so it runs on Renovate PRs too.
+        shell: bash
+        run: bash scripts/test-delivery.sh
+
+      - name: Snapshot script test
+        # Runs only when this PR changes scripts/snapshot-site.sh, which includes
+        # Renovate's Playwright pin bumps.
+        shell: bash
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- scripts/snapshot-site.sh; then
+            echo "scripts/snapshot-site.sh is unchanged; skipping the snapshot test"
+          else
+            bash scripts/test-delivery.sh --snapshot
+          fi
 
   delivery-doc:
     if: github.event_name == 'pull_request'
@@ -59,17 +64,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The merge commit and its first parent (the base branch tip).
+          # The merge commit and its parents: the PR head is the second parent.
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Test delivery check
-        # Tests the checker itself, so it runs on Renovate PRs too.
-        shell: bash
-        run: bash scripts/test-check-delivery.sh
-
-      - name: Check delivery doc
+      - name: Check the delivery doc
         # Renovate PRs automerge once checks pass and carry no delivery doc.
         if: github.event.pull_request.user.login != 'renovate[bot]'
         shell: bash
-        run: bash scripts/check-delivery.sh HEAD^1 HEAD
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: bash scripts/check-delivery.sh
