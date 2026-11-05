@@ -11,7 +11,7 @@ Each PR I open here is a delivery in the Qodo Software Factory hackathon. The ev
 - One dated doc per PR in `deliveries/`, copied from `deliveries/TEMPLATE.md`. Its headings follow the hackathon's daily template.
 - A CI check (`scripts/check-delivery.sh`, run by the `delivery-doc` job) fails a PR that has no doc or a doc missing a required `##` heading. It checks only the headings, not their content. It only warns on the Qodo TODO marker, because Qodo has only reviewed PRs after they leave draft. On #19 and #20 it commented within about a minute of the PR being marked ready, and never while it was a draft. Renovate PRs are exempt.
 - The folder is excluded from the site, and `check-site.sh` asserts that it is not published.
-- AGENTS.md rule 6 tells agents to follow the convention. I expect Qodo to import AGENTS.md as review standards (Day 2); Qodo's Review Standards UI will confirm it.
+- AGENTS.md rule 6 tells agents to follow the convention. Qodo did not import AGENTS.md on its own: its discovery had never run. When I started it after this PR merged, it created 9 review rules from AGENTS.md rules 3, 4 and 5, and none from rules 1, 2 or 6, so I added those three by hand.
 
 Rejected options, and why:
 
@@ -36,6 +36,8 @@ Rejected options, and why:
 
 ## Evidence
 
+**Update, 2026-11-05:** the Qodo import result was recorded after this PR merged, in PR [#23](https://github.com/lioramilbaum/lioramilbaum.github.io/pull/23). Qodo's discovery created 9 review rules from AGENTS.md rules 3, 4 and 5; I created rules 1, 2 and 6 by hand, and the delivery-doc rule flagged PR #21 within minutes.
+
 Local checks, run on this branch:
 
 - `shellcheck scripts/*.sh`: clean. `actionlint -ignore 'label "ubuntu-26.04" is unknown' .github/workflows/*.yml`: clean. The local actionlint (1.7.12) does not know the `ubuntu-26.04` label, so the flag is needed.
@@ -56,8 +58,8 @@ Qodo reviewed commit de7730e within two minutes of this PR leaving draft, and po
 
 - **Useful:** Qodo found a regression introduced by my own earlier fix. Adding `~~~` support made a tilde line inside a backtick example close the block, so example headings could again satisfy required sections. My reviewer had listed nested fences as a known limitation; Qodo showed a concrete way that limitation breaks the check. Fixed by tracking the opening fence character and length (CommonMark rules), with regression tests.
 - **Questioned:** nothing; the finding was correct.
-- **Missed:** Qodo did not flag the `{0,3}` interval regex that panics on mawk 1.3.4 (Ubuntu 24.04's default awk); my executor agent found it while fixing the finding. It still passed in CI because the GitHub runner uses gawk 5.3.2, but running the check locally on Ubuntu would have crashed. The earlier HIGH finding (example headings satisfying required sections) was fixed before Qodo saw this PR, so it doesn't count as a miss.
-- **Changed in the factory:** the fence parser now follows CommonMark; a regression test script (`scripts/test-check-delivery.sh`) runs in CI (gawk 5.3.2 on the runner); I ran it locally under BWK awk, mawk and gawk; and the lesson: when a reviewer documents a limitation, test that limitation.
+- **Missed:** Qodo did not flag the `{0,3}` interval regex that panics on mawk 1.3.4 (Ubuntu 24.04's default awk); my executor agent found it while fixing the finding. It still passed in CI because the GitHub runner uses gawk 5.3.2, but running the check locally on Ubuntu would have crashed. The earlier HIGH finding (example headings satisfying required sections) was fixed before Qodo saw this PR, so it doesn't count as a miss. Qodo did not import AGENTS.md until I started discovery, and then skipped rules 1, 2 and 6, the ones about documents and prose rather than code or CI files.
+- **Changed in the factory:** the fence parser now follows CommonMark; a regression test script (`scripts/test-check-delivery.sh`) runs in CI (gawk 5.3.2 on the runner); I ran it locally under BWK awk, mawk and gawk; and the lesson: when a reviewer documents a limitation, test that limitation. Added Qodo rules for AGENTS.md rules 1, 2 and 6 by hand, and check the Review Standards list after changing AGENTS.md.
 
 ## Assistance and third-party material
 
@@ -98,7 +100,7 @@ Every PR needs a delivery doc, because its evidence was scattered and Qodo clear
 - AGENTS.md: https://github.com/lioramilbaum/lioramilbaum.github.io/blob/main/AGENTS.md
 - The rule, quoted: "Copy findings into the doc before fixing them: Qodo rewrites its comment to "no open findings" once they are resolved."
 - The story: Qodo clears resolved findings from its comment, so the lessons are lost unless they are captured before the fix.
-- Qodo imported rule 6 as a Review Standard: TODO(qodo): confirm in Qodo's Review Standards
+- Qodo imported rule 6 as a Review Standard: not automatically. Discovery had never run; when I started it, it turned rules 3–5 into 9 review rules and skipped rules 1, 2 and 6, so I added those three by hand. The delivery-doc rule flagged PR #21 within minutes.
 - Checks: the `delivery-doc` CI job and `scripts/check-delivery.sh` run locally. Results are in the delivery doc.
 
 ## What I learned / what is blocked
