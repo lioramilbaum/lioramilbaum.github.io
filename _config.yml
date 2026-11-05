@@ -1,6 +1,22 @@
+# jekyll-github-metadata otherwise looks these up via the GitHub Pages API (needs
+# a token); values match the live deploy, so CI output is unchanged and local
+# builds need no token/network. baseurl must be "" (not omitted, not "/").
+url: https://lioramilbaum.com
+baseurl: ""
+
 plugins:
   - jekyll-relative-links
 
 relative_links:
   enabled: true
   collections: true
+# Setting `exclude` replaces Jekyll's built-in defaults (Gemfile, Gemfile.lock,
+# node_modules, vendor/, etc.) rather than extending them. Those defaults are
+# intentionally absent because none of those files exist in this repo. If any
+# of them are added later, add them to this list or they will be published.
+exclude:
+  # github-pages only adds CNAME to excludes when `exclude` is unset; keeping it
+  # out of _site matches production, and for this workflow-based deploy the
+  # custom domain comes from the repo's Pages settings.
+  - CNAME
+  - scripts/

@@ -26,43 +26,6 @@ jobs:
           source: .
           destination: ./_site
 
-      - name: Check homepage
+      - name: Check site
         shell: bash
-        run: |
-          set -euo pipefail
-          page=_site/index.html
-          fail() { echo "::error file=README.md::$1"; exit 1; }
-
-          test -f "$page" || fail "homepage was not built at $page"
-
-          for heading in "Platform Engineering" "DevOps" "AI" "Open Source"; do
-            grep -Eq "<h2[^>]*>${heading}</h2>" "$page" \
-              || fail "missing topic section: ## ${heading}"
-          done
-
-          if grep -Eq '<h2[^>]*>Documentation</h2>' "$page"; then
-            fail "legacy '## Documentation' section should be replaced by topic sections"
-          fi
-
-          section() { sed -n "/<h2[^>]*>$1<\/h2>/,/<h2/p" "$page"; }
-
-          section "Platform Engineering" | grep -q 'href="/docs/edge-appliance/glossary.html"' \
-            || fail "Edge Appliance glossary link missing from Platform Engineering"
-          test -f _site/docs/edge-appliance/glossary.html \
-            || fail "glossary page was not built"
-
-          section "AI" | grep -q 'href="https://github.com/lioramilbaum/projectmesh"' \
-            || fail "projectmesh link missing from AI"
-
-          if grep -Eq 'href="[^"]*\.md"' "$page"; then
-            fail "unrewritten .md link on homepage (jekyll-relative-links)"
-          fi
-
-          test -f _site/favicon.ico || fail "favicon.ico was not built"
-          test -f _site/assets/images/favicon.svg || fail "favicon.svg was not built"
-          test -f _site/assets/images/apple-touch-icon.png || fail "apple-touch-icon.png was not built"
-          for p in "$page" _site/docs/edge-appliance/glossary.html; do
-            grep -q 'rel="icon"' "$p" || fail "favicon link missing from $p"
-          done
-
-          echo "Homepage checks passed"
+        run: bash scripts/check-site.sh _site
