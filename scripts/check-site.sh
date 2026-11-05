@@ -45,7 +45,7 @@ for p in "$page" "$site/docs/edge-appliance/glossary.html"; do
   grep -q 'rel="icon"' "$p" || fail "favicon link missing from $p"
 done
 
-for repo_only in CNAME scripts AGENTS.md AGENTS.html; do
+for repo_only in CNAME scripts deliveries AGENTS.md AGENTS.html; do
   test ! -e "$site/$repo_only" || fail "repo-only path published: $repo_only" _config.yml
 done
 

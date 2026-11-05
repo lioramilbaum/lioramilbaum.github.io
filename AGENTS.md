@@ -22,6 +22,16 @@ bash scripts/check-site.sh _site
 
 # Preview (absolute URLs such as og:image point at production — expected)
 python3 -m http.server --directory _site 4000
+
+# Check this branch has a delivery doc (rule 6; commit it first)
+bash scripts/check-delivery.sh upstream/main HEAD
+
+# Regression tests for the delivery check (fence rules, sections, names, CRLF)
+bash scripts/test-check-delivery.sh
+
+# Read Qodo's review of a PR, including findings it has since cleared.
+# Set n to the PR number (21 is an example).
+gh api graphql -F n=21 -f query='query($n:Int!){repository(owner:"lioramilbaum",name:"lioramilbaum.github.io"){pullRequest(number:$n){comments(first:50){nodes{author{login} url body userContentEdits(first:20){nodes{editedAt diff}}}}}}}'
 ```
 
 ## Rules
@@ -68,6 +78,16 @@ Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/bui
 
 *Why:* A site about supply-chain integrity should practice what it describes. Pinning by SHA prevents silent tag moves.
 
+### 6. Every PR includes a delivery doc
+
+**Where:** `deliveries/`, `scripts/check-delivery.sh`, the `delivery-doc` job in `.github/workflows/check-site.yml`
+
+Every PR adds or updates one `deliveries/<YYYY-MM-DD>-<slug>.md`, copied from `deliveries/TEMPLATE.md`: the date the PR opens, and the branch name without its type prefix (`feat/site-snapshots` → `2026-11-05-site-snapshots.md`). Write it for hackathon readers and other builders, not for agents. Fill "What I learned from the Qodo review" only from real `qodo-code-review[bot]` output; until Qodo has reviewed the PR (Qodo has only reviewed PRs after they leave draft), keep the `TODO(qodo)` marker, which CI flags as a warning. Copy findings into the doc before fixing them: Qodo rewrites its comment to "no open findings" once they are resolved. Never post to the hackathon discussions; the owner does. Renovate PRs are exempt.
+
+*Why:* Each PR is a delivery in the Qodo Software Factory hackathon, and the doc is the evidence posted to the daily discussion. CI fails a PR without one.
+
 ## Workflow
 
 Conventional commit prefixes: `feat`, `fix`, `docs`, `chore`, `ci`. One commit per PR.
+
+After Qodo reviews a PR: record its findings in the delivery doc, fix the confirmed ones, replace `TODO(qodo)`, amend the single commit, and force-push with `--force-with-lease`. Qodo has re-reviewed each force-pushed commit so far (usually within a minute); check the commit marker in its comment to confirm which commit it reviewed.
