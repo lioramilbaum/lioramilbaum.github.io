@@ -1,130 +1,93 @@
 #!/usr/bin/env bash
-# AGENTS.md rule 6: every PR adds or updates a delivery doc,
-# deliveries/<YYYY-MM-DD>-<slug>.md, that has every top-level "## " heading of
-# deliveries/TEMPLATE.md. Only those headings are checked, not the content. A
-# TODO(qodo) marker only warns, because Qodo has only reviewed PRs after they
-# leave draft. Renovate PRs are exempted in the workflow, not here.
+# AGENTS.md rule 6: checks the PR's own delivery doc against the PR head. It asks
+# two questions. Does the doc exist? If not, CI warns and passes. Was the doc
+# generated for this head's content digest (the tree without the doc and its
+# screenshots)? If not, it fails. Once the delivery window has ended, the check
+# passes without reading the doc. Renovate PRs are skipped in the workflow.
 #
-# Fenced code blocks follow CommonMark: a block opens with three or more ``` or
-# ~~~ (up to three spaces of indent; a backtick info string may not contain a
-# backtick). It closes only at a fence of the same character, at least as long,
-# with nothing after it. "## " lines inside a block do not count. CRLF line
-# endings are accepted. AWK selects the awk binary (default: awk);
-# scripts/test-check-delivery.sh runs the cases under each awk.
-#
-# Usage: scripts/check-delivery.sh [BASE] [HEAD]
-#   BASE defaults to upstream/main if it exists, else origin/main.
-#   HEAD defaults to HEAD. CI runs: scripts/check-delivery.sh HEAD^1 HEAD
-#   (the pull_request merge commit and its base-branch parent).
+# Usage: scripts/check-delivery.sh                 (CI: the PR's doc, from the environment)
+#        scripts/check-delivery.sh --digest COMMIT DOC
+#        scripts/check-delivery.sh --window        (exit 0 open, 3 ended)
+# Environment: HEAD_SHA, PR_CREATED_AT and HEAD_REF name the doc, as in
+# generate-delivery.sh. NOW overrides the clock (tests use it). AWK selects awk.
 set -euo pipefail
+LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-template=deliveries/TEMPLATE.md
-name_re='^deliveries/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*\.md$'
+# The delivery window ends here: exclusive, the end of Dec 12 CET (AGENTS.md rule 6).
+cutoff=2026-12-12T23:00:00Z
+window_open() {
+  local now
+  now=${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  [[ "$now" < "$cutoff" ]]
+}
 
-# fail FILE MESSAGE: annotate in GitHub Actions, otherwise print to stderr.
-fail() {
+# digest COMMIT DOC: the digest of COMMIT's tree without DOC and DOC's screenshot
+# directory. Amending the doc into the commit leaves it unchanged.
+digest() {
+  # shellcheck disable=SC2016 # awk program, not the shell
+  git ls-tree -r --full-tree "$1" \
+    | "${AWK:-awk}" -F'\t' -v doc="$2" -v dir="${2%.md}/" \
+      'index($2, dir) == 1 || $2 == doc { next } { print }' \
+    | git hash-object --stdin
+}
+
+case "${1:-}" in
+  --window)
+    if window_open; then echo "delivery window is open until $cutoff"; exit 0; fi
+    echo "delivery window ended at $cutoff"
+    exit 3
+    ;;
+  --digest)
+    [[ $# -eq 3 ]] || { echo "usage: scripts/check-delivery.sh --digest COMMIT DOC" >&2; exit 1; }
+    digest "$2" "$3"
+    exit 0
+    ;;
+  "") ;;
+  *) echo "usage: scripts/check-delivery.sh [--window | --digest COMMIT DOC]" >&2; exit 1 ;;
+esac
+
+# say LEVEL FILE MESSAGE: annotates in GitHub Actions, otherwise prints to stderr.
+say() {
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    echo "::error file=$1::$2"
+    echo "::$1 file=$2::$3"
   else
-    echo "error: $1: $2" >&2
-  fi
-  exit 1
-}
-
-# warn FILE MESSAGE: does not fail the check.
-warn() {
-  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    echo "::warning file=$1::$2"
-  else
-    echo "warning: $1: $2" >&2
+    echo "$1: $2: $3" >&2
   fi
 }
+fail() { say error "$1" "$2"; exit 1; }
 
-# top_level_headings: "## " lines on stdin that are outside fenced code blocks.
-# Plain string functions only (no interval expressions), so it runs on BWK
-# awk, mawk and gawk.
-top_level_headings() {
-  # shellcheck disable=SC2016 # $0 belongs to awk, not the shell
-  "${AWK:-awk}" '
-    # run(s, c): length of the run of character c at the start of s.
-    function run(s, c,   n) {
-      n = 0
-      while (substr(s, n + 1, 1) == c) n++
-      return n
-    }
-    {
-      ind = 0
-      while (substr($0, ind + 1, 1) == " ") ind++
-      rest = substr($0, ind + 1)
-      if (fence == "") {
-        ch = substr(rest, 1, 1)
-        if (ind <= 3 && (ch == "`" || ch == "~")) {
-          n = run(rest, ch)
-          if (n >= 3 && (ch == "~" || index(substr(rest, n + 1), "`") == 0)) {
-            fence = ch
-            flen = n
-            next
-          }
-        }
-        if (substr($0, 1, 3) == "## ") print
-      } else if (ind <= 3 && substr(rest, 1, 1) == fence) {
-        n = run(rest, fence)
-        if (n >= flen && substr(rest, n + 1) ~ /^[ \t]*$/) fence = ""
-      }
-    }
-  '
-}
-
-base="${1:-}"
-if [[ -z "$base" ]]; then
-  if git rev-parse --verify --quiet upstream/main >/dev/null; then
-    base=upstream/main
-  else
-    base=origin/main
-  fi
-fi
-head="${2:-HEAD}"
-
-test -f "$template" || fail "$template" "delivery template is missing"
-
-headings=$(tr -d '\r' < "$template" | top_level_headings)
-[[ -n "$headings" ]] || fail "$template" "no top-level '## ' headings found in the template"
-required=$(awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }' <<< "$headings")
-
-mb=$(git merge-base "$base" "$head") \
-  || fail deliveries/ "could not find a merge-base of $base and $head"
-
-changed=$(git diff --name-only --diff-filter=AMR "$mb" "$head" -- deliveries/) \
-  || fail deliveries/ "could not list changed files under deliveries/"
-
-docs=()
-while IFS= read -r f; do
-  if [[ -n "$f" && "$f" != "$template" ]]; then
-    docs+=("$f")
-  fi
-done <<< "$changed"
-
-if [[ ${#docs[@]} -eq 0 ]]; then
-  fail deliveries/ "no delivery doc added or updated under deliveries/ (AGENTS.md rule 6)"
+if ! window_open; then
+  echo "notice: the delivery window has ended; the delivery doc is no longer checked"
+  exit 0
 fi
 
-for f in "${docs[@]}"; do
-  [[ "$f" =~ $name_re ]] \
-    || fail "$f" "name must match deliveries/<YYYY-MM-DD>-<slug>.md (AGENTS.md rule 6)"
+: "${HEAD_SHA:?set HEAD_SHA to the PR head commit}"
+: "${PR_CREATED_AT:?set PR_CREATED_AT to the PR open time}"
+: "${HEAD_REF:?set HEAD_REF to the PR head branch}"
+[[ "$PR_CREATED_AT" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T ]] \
+  || fail deliveries/ "PR_CREATED_AT is not an ISO time: $PR_CREATED_AT"
+date=${BASH_REMATCH[1]}
+case "$HEAD_REF" in
+  */*) slug=${HEAD_REF#*/} ;;
+  *) slug=$HEAD_REF ;;
+esac
+doc="deliveries/$date-$slug.md"
 
-  content=$(git show "$head:$f" | tr -d '\r') || fail "$f" "could not read $f at $head"
-  top=$(top_level_headings <<< "$content")
+git rev-parse --verify --quiet "$HEAD_SHA^{commit}" >/dev/null \
+  || fail "$doc" "HEAD_SHA $HEAD_SHA is not a commit in this clone"
 
-  while IFS= read -r heading; do
-    grep -qxF -- "$heading" <<< "$top" \
-      || fail "$f" "missing required section '$heading' (from $template); required sections: $required"
-  done <<< "$headings"
+if ! git cat-file -e "$HEAD_SHA:$doc" 2>/dev/null; then
+  say warning "$doc" "no delivery doc at $doc in $HEAD_SHA; the delivery-doc skill writes it (AGENTS.md rule 6)"
+  exit 0
+fi
 
-  if grep -qF 'TODO(qodo)' <<< "$content"; then
-    warn "$f" "TODO(qodo) is still present; fill it in from Qodo's review (Qodo has only reviewed PRs after they leave draft)"
-  fi
+recorded=$(git show "$HEAD_SHA:$doc" | tr -d '\r' \
+  | sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) .*-->$/\1/p' | tail -n1)
+[[ -n "$recorded" ]] || fail "$doc" "no delivery metadata comment; run scripts/generate-delivery.sh (AGENTS.md rule 6)"
 
-  echo "$f: ok"
-done
+want=$(digest "$HEAD_SHA" "$doc")
+[[ "$recorded" == "$want" ]] \
+  || fail "$doc" "stale: the doc was generated for content $recorded but $HEAD_SHA has content $want; run scripts/generate-delivery.sh and amend the doc"
+echo "$doc: ok (content $want)"

@@ -9,7 +9,7 @@ Personal portfolio site for Liora Milbaum, hosted at [lioramilbaum.com](https://
 
 ## Setup
 
-The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access.
+The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access. The delivery-doc skill (`scripts/generate-delivery.sh`) needs an authenticated `gh`, `python3` (it serves the head build on 127.0.0.1 for the screenshots), `curl`, and Docker; `scripts/test-delivery.sh` also needs `jq`. The screenshot step is verified on Docker Desktop (macOS); on native Linux Docker, the preview server bound to 127.0.0.1 is not reachable through host-gateway, and that path is not supported.
 
 ## Verify
 
@@ -29,14 +29,14 @@ scripts/snapshot-site.sh [URL] [DIR]
 # Screenshot the local preview from the Preview step above (Docker and network needed)
 scripts/snapshot-site.sh http://host.docker.internal:4000 _snapshots
 
-# Download a deploy's snapshots (for a PR, use -n site-preview-<sha7> instead)
-gh run download <run-id> -R lioramilbaum/lioramilbaum.github.io -n site-snapshots-<sha7> -D _snapshots
+# Offline tests for the delivery-doc generator and the check (needs jq)
+bash scripts/test-delivery.sh
 
-# Check this branch has a delivery doc (rule 6; commit it first)
-bash scripts/check-delivery.sh upstream/main HEAD
+# Docker test: the snapshot script rejects a page that only the browser sees as 404
+bash scripts/test-delivery.sh --snapshot
 
-# Regression tests for the delivery check (fence rules, sections, names, CRLF)
-bash scripts/test-check-delivery.sh
+# Check the PR's delivery doc is current for its head (run on the branch, after CI and Qodo review)
+scripts/generate-delivery.sh --pr 21 --check
 
 # Read Qodo's review of a PR, including findings it has since cleared.
 # Set n to the PR number (21 is an example).
@@ -89,24 +89,24 @@ Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/bui
 
 ### 6. Every PR includes a delivery doc
 
-**Where:** `deliveries/`, `scripts/check-delivery.sh`, the `delivery-doc` job in `.github/workflows/check-site.yml`
+**Where:** `deliveries/`, `scripts/generate-delivery.sh`, `scripts/check-delivery.sh`, `.github/pull_request_template.md`, the `delivery-doc` job in `.github/workflows/check-site.yml`, `.claude/skills/delivery-doc/SKILL.md`
 
-Every PR adds or updates one `deliveries/<YYYY-MM-DD>-<slug>.md`, copied from `deliveries/TEMPLATE.md`: the date the PR opens, and the branch name without its type prefix (`feat/site-snapshots` → `2026-11-05-site-snapshots.md`). Write it for hackathon readers and other builders, not for agents. Fill "What I learned from the Qodo review" only from real `qodo-code-review[bot]` output; until Qodo has reviewed the PR (Qodo has only reviewed PRs after they leave draft), keep the `TODO(qodo)` marker, which CI flags as a warning. Copy findings into the doc before fixing them: Qodo rewrites its comment to "no open findings" once they are resolved. Never post to the hackathon discussions; the owner does. Renovate PRs are exempt.
+Every PR adds one `deliveries/<YYYY-MM-DD>-<slug>.md`: the date the PR opens, and the branch name without its type prefix (`feat/site-snapshots` → `2026-11-05-site-snapshots.md`). The delivery-doc skill generates it locally with `scripts/generate-delivery.sh`, from `deliveries/TEMPLATE.md`. The Why, How, What, Assistance and third-party material, and Limitations sections are copied verbatim from the PR description (`.github/pull_request_template.md`). Evidence comes from the CI run, the two homepage builds, and Qodo's review comment with its edit history, so findings Qodo clears later are still recorded. Nothing is written by hand. The skill amends the doc into the PR's single commit and force-pushes.
 
-*Why:* Each PR is a delivery in the Qodo Software Factory hackathon, and the doc is the evidence posted to the daily discussion. CI fails a PR without one.
+CI runs `scripts/check-delivery.sh` on the PR's own doc. It asks two questions. Does the doc exist? If not, CI posts a warning and stays green. Was it generated for this exact code, the head's content digest (the tree without the doc and its screenshot)? If not, CI is red. CI does not check the doc's sections, the homepage, the screenshot, or the Qodo and CI-run evidence: those are only as current as the last skill run. The check is advisory, not a ruleset. Renovate PRs are exempt. The process ends 2026-12-12 23:00 UTC (end of Dec 12 CET); after that, the check passes without reading the doc. Existing docs are never changed.
 
-### 7. Snapshots are artifacts; the screenshots branch is frozen
+*Why:* Each PR is a delivery in the Qodo Software Factory hackathon, and the doc is the evidence posted to the daily discussion. Hand-written evidence drifted from the commits it described. Generated evidence is keyed to content digests, so CI can check it.
 
-**Where:** `.github/workflows/deploy-pages.yml` (`snapshot` job), `.github/workflows/check-site.yml`, the `screenshots` branch
+### 7. Homepage screenshots are committed beside the doc; the screenshots branch is frozen
 
-After each deploy, the `snapshot` job uploads desktop and phone PNGs of the live homepage as the `site-snapshots-<sha7>` artifact (kept 90 days). Every PR uploads `site-preview-<sha7>` from the built `_site` (kept 14 days). Nothing is committed to git. Never delete, modify or push to the `screenshots` branch.
+**Where:** `scripts/snapshot-site.sh`, `scripts/generate-delivery.sh`, `deliveries/<stem>/`, the `screenshots` branch
 
-The snapshot job runs inside the deploy workflow's `pages` concurrency group, so the next deploy waits for it. This takes up to its 15-minute timeout, usually 1–3 minutes, and this is intentional so that a normal capture matches its commit. A re-run of an older run is guarded by the newest-deployment skip checks, not by the group. The job is `continue-on-error`, so a failed snapshot leaves the deploy run green and shows only as a failed job or annotation.
+There are no post-merge snapshots: the deploy workflow captures nothing. A PR's homepage screenshot is taken with `scripts/snapshot-site.sh` (Playwright in a digest-pinned Docker image) only when the PR head's homepage build differs from its merge-base build; the generator compares them. It is committed as `deliveries/<stem>/desktop.png` (1280 px), beside the doc, at most 500 KB. The generator enforces this; CI does not. If the homepage did not change, there is no PNG. Never delete, modify or push to the `screenshots` branch. PR homepage screenshots stop with the rest of the process at 2026-12-12 23:00 UTC (rule 6).
 
-*Why:* `screenshots` is a frozen baseline whose raw URL (`2026-11-04/desktop.png`) is embedded publicly; changing it breaks that link.
+*Why:* The raw URL of the November 4 baseline (`2026-11-04/desktop.png`) is embedded publicly, so moving or overwriting that branch breaks it. Committed PNGs travel with the PR and need no artifact expiry.
 
 ## Workflow
 
 Conventional commit prefixes: `feat`, `fix`, `docs`, `chore`, `ci`. One commit per PR.
 
-After Qodo reviews a PR: record its findings in the delivery doc, fix the confirmed ones, replace `TODO(qodo)`, amend the single commit, and force-push with `--force-with-lease`. Qodo has re-reviewed each force-pushed commit so far (usually within a minute); check the commit marker in its comment to confirm which commit it reviewed.
+After CI and Qodo have reviewed a PR, run the delivery-doc skill (`.claude/skills/delivery-doc/SKILL.md`). It generates the doc and amends the single commit. Qodo re-reviews each force-pushed commit, usually within a minute; the doc's digest check confirms the review matches the head. Mark a draft ready first: Qodo does not review drafts.
