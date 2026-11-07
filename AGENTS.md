@@ -105,6 +105,18 @@ There are no post-merge snapshots: the deploy workflow captures nothing. A PR's 
 
 *Why:* The raw URL of the November 4 baseline (`2026-11-04/desktop.png`) is embedded publicly, so moving or overwriting that branch breaks it. Committed PNGs travel with the PR and need no artifact expiry.
 
+### 8. Every line a PR adds or changes is tested in CI
+
+**Where:** the code a PR adds or changes (`scripts/` except `check-*.sh` and `test-*.sh`, `.github/workflows/`, `_layouts/`, `_config.yml`) and the Limitations section of the PR description
+
+CI must exercise every line of code the PR adds or changes. Code already on `main` is covered when a PR changes it, not before. Test code is exempt: checks and tests (`scripts/check-*.sh`, `scripts/test-*.sh` and the `check-site.yml` steps that run them; other workflow changes are other code) must run in CI, but don't need tests of their own; a new check must still be run by CI against a failing input at least once (push a deliberately broken revision, let CI go red, and link that run in the PR description). Every other file under `scripts/` (`build-site.sh`, `snapshot-site.sh`, `generate-delivery.sh`) is other code and needs tests. For `_layouts/` and `_config.yml`, a `check-site.sh` assertion on the built `_site` output that fails without the change counts as exercising it.
+
+- Every new branch or failure path in other code has a CI test that fails without it: a case in a `scripts/test-*.sh` run by `.github/workflows/check-site.yml`, or an assertion in `scripts/check-site.sh`. Wire each new test into CI in the same PR.
+- Nothing is verified only by hand. One-off mutation runs on a local machine, scripts documented as "run by hand", and manual browser checks don't count as tests. The red CI run a new check needs (above) is a CI run, not a by-hand check.
+- Anything that truly can't run in CI is named in the PR's Limitations section, with the reason (for example, LinkedIn's share dialog needs a signed-in account).
+
+*Why:* PR #34 (issue #27) first relied on one-off mutation runs, a by-hand link check and a manual browser check, so the owner required CI coverage for every line. The rule covers only new and changed lines, so code already on `main` whose real-world behaviour CI can't reproduce, such as the real GitHub responses behind `scripts/generate-delivery.sh`'s `gh` calls, doesn't break it. Test code is exempt so that tests don't need tests of their own; running in CI is what keeps it honest.
+
 ## Workflow
 
 Conventional commit prefixes: `feat`, `fix`, `docs`, `chore`, `ci`. One commit per PR.
