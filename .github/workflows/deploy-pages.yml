@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+  schedule:
+    # Rebuild once a year so the footer year (site.time) rolls over. This is
+    # best-effort: GitHub disables schedules in public repos after 60 days
+    # without activity, so workflow_dispatch is the manual fallback.
+    - cron: '17 0 1 1 *'
   workflow_dispatch:
 
 permissions:

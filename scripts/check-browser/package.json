@@ -1,0 +1,7 @@
+{
+  "name": "check-browser",
+  "private": true,
+  "dependencies": {
+    "playwright": "1.65.0"
+  }
+}

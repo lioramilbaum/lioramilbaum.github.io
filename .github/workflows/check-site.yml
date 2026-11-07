@@ -35,6 +35,26 @@ jobs:
         shell: bash
         run: bash scripts/check-site.sh _site
 
+      - name: Check workflow files
+        # Ruby in the Jekyll image the build step pulled; no network.
+        shell: bash
+        run: bash scripts/check-workflows.sh
+
+      - name: Browser check
+        # Playwright (pinned in snapshot-site.sh), JavaScript off, light and dark.
+        # On a PR, HEAD^1 is the base branch, so the diff covers the whole PR. Any
+        # other event (a manual run) always runs the check.
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]] &&
+             git diff --quiet HEAD^1 HEAD -- _layouts docs README.md _config.yml assets \
+               .github/workflows/check-site.yml scripts/check-browser.sh scripts/check-browser \
+               scripts/snapshot-site.sh; then
+            echo "pages and browser check unchanged in this PR; skipping the browser check"
+          else
+            bash scripts/check-browser.sh _site
+          fi
+
       - name: Install jq
         # scripts/test-delivery.sh filters its gh stub's output with jq.
         shell: bash
@@ -55,6 +75,16 @@ jobs:
           else
             bash scripts/test-delivery.sh --snapshot
           fi
+
+      - name: Check external links
+        # Third-party sites: a dead link warns and does not block. A failing job
+        # would stall Renovate automerge and the delivery-doc generator.
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        # No GITHUB_TOKEN: the script comes from the PR. The comment lookups use the
+        # unauthenticated API (60 requests an hour per IP); a rate limit only warns.
+        run: bash scripts/check-links.sh
 
   delivery-doc:
     if: github.event_name == 'pull_request'

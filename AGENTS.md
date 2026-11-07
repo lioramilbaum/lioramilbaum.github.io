@@ -9,7 +9,7 @@ Personal portfolio site for Liora Milbaum, hosted at [lioramilbaum.com](https://
 
 ## Setup
 
-The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access. The delivery-doc skill (`scripts/generate-delivery.sh`) needs an authenticated `gh`, `python3` (it serves the head build on 127.0.0.1 for the screenshots), `curl`, and Docker; `scripts/test-delivery.sh` also needs `jq`. The screenshot step is verified on Docker Desktop (macOS); on native Linux Docker, the preview server bound to 127.0.0.1 is not reachable through host-gateway, and that path is not supported.
+The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access. `scripts/check-workflows.sh` needs Docker only (`--network none`). `scripts/check-browser.sh` needs Docker and network (`npm ci` installs Playwright in the container from `scripts/check-browser/package-lock.json`, which pins the npm tarballs by integrity; its version must match the image's). It serves the site inside the container, so unlike the screenshot step it also works on native Linux Docker. `scripts/check-links.sh` needs network. The delivery-doc skill (`scripts/generate-delivery.sh`) needs an authenticated `gh`, `python3` (it serves the head build on 127.0.0.1 for the screenshots), `curl`, and Docker; `scripts/test-delivery.sh` also needs `jq`. The screenshot step is verified on Docker Desktop (macOS); on native Linux Docker, the preview server bound to 127.0.0.1 is not reachable through host-gateway, and that path is not supported.
 
 ## Verify
 
@@ -28,6 +28,15 @@ scripts/snapshot-site.sh [URL] [DIR]
 
 # Screenshot the local preview from the Preview step above (Docker and network needed)
 scripts/snapshot-site.sh http://host.docker.internal:4000 _snapshots
+
+# Check that the hackathon page's external links resolve (network needed; run scripts/build-site.sh first). CI runs this too, as a non-blocking step: a dead link warns.
+bash scripts/check-links.sh
+
+# Parse the workflow files and check the yearly deploy schedule (Docker, no network)
+scripts/check-workflows.sh
+
+# Browser check of the hackathon page: JavaScript off, light and dark contrast (Docker and network; build first)
+scripts/check-browser.sh
 
 # Offline tests for the delivery-doc generator and the check (needs jq)
 bash scripts/test-delivery.sh
@@ -83,7 +92,7 @@ Keep the four `##` topic sections with exactly these names: **Platform Engineeri
 
 **Where:** `.github/workflows/*.yml`, `renovate.json`
 
-Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). The Playwright image in `scripts/snapshot-site.sh` is tracked by the regex in `renovate.json`; keep its `image="…:vX.Y.Z-noble@sha256:…"` form. Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
+Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). The Playwright image in `scripts/snapshot-site.sh` is tracked by the regex in `renovate.json`; keep its `image="…:vX.Y.Z-noble@sha256:…"` form. `scripts/check-browser.sh` reads the image from that line; never copy the pin. `scripts/check-browser/package.json` and its `package-lock.json` pin Playwright's npm package to the same version as that image; the lockfile pins the tarballs by integrity. Renovate moves the image and the npm package together in one PR (the `Playwright` group), and `scripts/check-browser.sh` fails if the versions differ. If a Renovate PR fails check-browser.sh's version check, one side (the image or the npm package) isn't published yet; the next run picks it up. `scripts/snapshot-site.sh` still installs its package by version only. Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
 
 *Why:* A site about supply-chain integrity should practice what it describes. Pinning by SHA prevents silent tag moves.
 

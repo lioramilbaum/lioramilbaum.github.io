@@ -201,8 +201,7 @@
       {{ content }}
     </section>
 
-    <footer>&copy; <span id="yr"></span> Liora Milbaum
-<script>document.getElementById('yr').textContent=new Date().getFullYear();</script></footer>
+    <footer>&copy; {{ site.time | date: "%Y" }} Liora Milbaum</footer>
   </main>
 </body>
 </html>
