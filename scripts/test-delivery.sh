@@ -1173,6 +1173,42 @@ else
   report "hk. an empty Hackathon heading is absent; a non-empty one without a link fails" 1 "empty: $hk_empty; gen rc $GEN_RC: $(cat "$FX/gen.log")"
 fi
 
+# ac. The real PR template has "Closes #" and "## Acceptance criteria" before "## Why"
+# (AGENTS.md rule 10). Guards: section() takes the Why section by its exact heading only. The
+# criteria carry lines a loose match would take for Why ("## Why (from the issue)", "### Why",
+# "##Why", an indented "## Why"), each followed by AC-MARKER-WHY. The filled template must
+# generate, the doc's Why body must be exactly "Filled Why.", and no AC-MARKER text (AC-MARKER-WHY
+# included) may appear anywhere in the doc. The criteria are not copied.
+tpl=$root/.github/pull_request_template.md
+pr_case ac other plain
+# shellcheck disable=SC2016 # awk program, not the shell
+"$awk_bin" '
+  /^Closes #/ { print "Closes #24"; next }
+  { print }
+  /^## Acceptance criteria$/ {
+    print ""
+    print "- [ ] AC-MARKER the page builds"
+    print "### Why"; print "AC-MARKER-WHY"
+    print "##Why"; print "AC-MARKER-WHY"
+    print "## Why (from the issue)"; print "AC-MARKER-WHY"
+    print "    ## Why"; print "AC-MARKER-WHY"
+  }
+  /^## (Why|How|What|Assistance and third-party material|Limitations)$/ { print ""; print "Filled " substr($0, 4) "." }
+' "$tpl" > "$FX/body.md"
+fx_pr "$(head_sha)" "$FX/body.md"
+gen "$CASE"
+ac_order=$(grep -E '^## (Acceptance criteria|Why)$' "$tpl" | tr '\n' '|')
+# shellcheck disable=SC2016 # awk program, not the shell
+why_body=$("$awk_bin" '/^## Why$/ { on = 1; next } /^## / { on = 0 } on' "$CASE/$doc_name" 2>/dev/null \
+  | sed '/^_From the PR description (author-written)\._$/d; /^[[:space:]]*$/d')
+if [ "$ac_order" = "## Acceptance criteria|## Why|" ] && grep -q '^Closes #' "$tpl" \
+  && [ "$GEN_RC" -eq 0 ] && [ "$why_body" = "Filled Why." ] \
+  && ! grep -qF 'AC-MARKER' "$CASE/$doc_name"; then
+  report "ac. the PR template's Acceptance criteria parse cleanly and stay out of the doc" 0
+else
+  report "ac. the PR template's Acceptance criteria parse cleanly and stay out of the doc" 1 "order '$ac_order'; gen rc $GEN_RC; Why body '$why_body': $(cat "$FX/gen.log")"
+fi
+
 # au. Only the Qodo bot's comments count: a newer comment by a person that quotes the
 # review heading is ignored.
 pr_case au home plain
