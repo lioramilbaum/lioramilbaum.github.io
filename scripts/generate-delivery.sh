@@ -3,6 +3,8 @@
 # slug>.md, from deliveries/TEMPLATE.md. Every section comes from the PR
 # description, CI runs, the builds, or Qodo's review comment. Nothing is written
 # by hand. The delivery-doc skill runs this and amends the doc into the PR commit.
+# The metadata line records how many findings Qodo's latest review lists (qodo-open,
+# AGENTS.md rule 9); check-delivery.sh fails unless it is 0.
 #
 # Usage: scripts/generate-delivery.sh --pr N [--check]
 #   --check  writes nothing; exits 1 and prints a diff if the doc would change.
@@ -382,59 +384,19 @@ fi
 qodo_body="$tmp/qodo-body.md"
 if (( qcomments == 0 )); then
   echo 'Qodo has not reviewed this PR yet: there is no "Code Review by Qodo" comment.' > "$qodo_body"
+  echo none > "$tmp/qodo-open"
 else
-  # Stage 1: one V line per version (its marked commit), one F line per finding.
-  # Each version is parsed on its own, so no text can open a new version.
+  # Stage 1: one V line per version (its marked commit), one C line for a version that is clear,
+  # one F line per finding. Each version is parsed on its own, so no text can open a new version.
+  # The parse is scripts/qodo-review.awk, shared with qodo-status.sh and qodo-gate.sh (AGENTS.md
+  # rule 9).
   parsed="$tmp/qodo-parsed.txt"
   : > "$parsed"
   vn=0
   # shellcheck disable=SC2012 # version file names are generated above (no spaces)
   while IFS= read -r f; do
     vn=$((vn + 1))
-    # shellcheck disable=SC2016 # awk program, not the shell
-    "$awk" -v vnum="$vn" '
-      function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-      {
-        if (sha == "" && substr($0, 1, 5) == "<!-- " && (i = index($0, "/commit/")) > 0) {
-          s = substr($0, i + 8, 40)
-          if (length(s) == 40 && s ~ /^[0-9a-f]+$/) sha = s
-        }
-        if ((i = index($0, "<strong>View ")) > 0) {
-          s = substr($0, i + 13)
-          sub(/[ <].*$/, "", s)
-          sev = s
-          next
-        }
-        if ($0 ~ /<summary>[ \t]*[0-9]+\.[ \t]/) {
-          n++; last = n
-          s = $0
-          sub(/^.*<summary>[ \t]*[0-9]+\.[ \t]/, "", s)
-          sub(/<\/summary>.*$/, "", s)
-          k = index(s, "<code>")
-          t = (k > 0) ? substr(s, 1, k - 1) : s
-          codes = (k > 0) ? substr(s, k) : ""
-          kind = ""
-          while ((k = index(codes, "<code>")) > 0) {
-            codes = substr(codes, k + 6)
-            e = index(codes, "</code>")
-            c = (e > 0) ? substr(codes, 1, e - 1) : codes
-            if (kind == "" && index(c, "New") == 0) kind = c
-            codes = (e > 0) ? substr(codes, e + 7) : ""
-          }
-          gsub(/\t/, " ", t); gsub(/\t/, " ", kind)
-          ft[n] = trim(t); fk[n] = trim(kind); fu[n] = ""; fsev[n] = sev
-          next
-        }
-        if (last > 0 && fu[last] == "" && (i = index($0, "/findings/")) > 0) fu[last] = substr($0, i + 10, 36)
-      }
-      END {
-        print "V\t" vnum "\t" sha
-        for (j = 1; j <= n; j++) {
-          key = fu[j]
-          if (key == "") key = "title:" ft[j]
-          print "F\t" vnum "\t" fsev[j] "\t" key "\t" fk[j] "\t" ft[j]
-        }
-      }' "$qodo_versions/$f" >> "$parsed"
+    "$awk" -v vnum="$vn" -f "$root/scripts/qodo-review.awk" "$qodo_versions/$f" >> "$parsed"
   done <<< "$(ls -A "$qodo_versions" | LC_ALL=C sort)"
 
   # Stage 2: each version's marked commit becomes its content digest.
@@ -447,14 +409,22 @@ else
       fi
       printf 'V\t%s\t%s\n' "$vnum" "$digest"
     done < <(grep '^V' "$parsed")
+    grep '^C' "$parsed" || true
     grep '^F' "$parsed" || true
   } > "$ready"
 
   # Stage 3: the findings, with the state of each in Qodo's latest review.
   # shellcheck disable=SC2016 # awk program, not the shell
-  "$awk" -F'\t' '
+  "$awk" -F'\t' -v head="$D" -v openf="$tmp/qodo-open" '
     function code(s) { return "`" s "`" }
+    function unclear() {
+      printf "Qodo\047s latest review is not of this PR\047s content (%s), so its findings are not cleared.\n", code(head)
+    }
+    function unreadable() {
+      print "Qodo\047s latest review could not be read: it has no finding the generator can parse, and not every group says it is clear."
+    }
     $1 == "V" { nv = $2 + 0; vd[nv] = $3; next }
+    $1 == "C" { cl[$2 + 0] = 1; next }
     $1 == "F" {
       key = $4
       if (!(key in ft)) { order[++no] = key; ft[key] = $6; fsev[key] = $3; fkind[key] = $5 }
@@ -467,6 +437,8 @@ else
       next
     }
     END {
+      ok = (vd[nv] == head)
+      nopen = 0
       list = ""
       for (i = 1; i <= nv; i++) {
         if (index(all, "|" vd[i] "|") == 0) {
@@ -475,17 +447,42 @@ else
         }
       }
       printf "Qodo reviewed these contents (by content digest): %s. Its latest review is content %s.\n\n", list, code(vd[nv])
-      if (no == 0) { print "Qodo\047s latest review lists no findings."; exit }
+      if (no == 0) {
+        # No parsed finding counts as zero only when the latest review of the head says it is
+        # clear. Otherwise the layout is unknown to this generator, and the owner must look.
+        if (!ok) { unclear(); print "other" > openf }
+        else if (cl[nv]) { print "Qodo\047s latest review lists no findings."; print "0" > openf }
+        else { unreadable(); print "unknown" > openf }
+        close(openf)
+        exit
+      }
       for (k = 1; k <= no; k++) {
         key = order[k]
         detail = ""
         if (fsev[key] != "") detail = toupper(substr(fsev[key], 1, 1)) substr(fsev[key], 2)
         if (fkind[key] != "") detail = (detail == "" ? "" : detail ", ") fkind[key]
         status = (lastv[key] == nv) ? "Open in Qodo\047s latest review." : "No longer listed by Qodo."
+        if (lastv[key] == nv) nopen++
         printf "- %s%s. %s Reviewed in content %s.\n", ft[key], (detail == "" ? "" : " (" detail ")"), status, dl[key]
       }
+      if (!ok) {
+        printf "\n"
+        unclear()
+        print "other" > openf
+      } else if (nopen == 0 && !cl[nv]) {
+        # Only findings that the latest review no longer lists were parsed, and it is not clear:
+        # the open ones may sit in a layout this parse misses, so the count is not zero.
+        printf "\n"
+        unreadable()
+        print "unknown" > openf
+      } else {
+        printf "\nOpen findings in Qodo\047s latest review: %d.\n", nopen
+        print nopen > openf
+      }
+      close(openf)
     }' "$ready" > "$qodo_body"
 fi
+qodo_open=$(cat "$tmp/qodo-open")
 
 qodo_notes="$tmp/qodo-notes.md"
 if section "$tmp/pr-body.md" "Qodo notes" > "$tmp/sec-qodo-notes.md" && [[ -s "$tmp/sec-qodo-notes.md" ]]; then
@@ -566,7 +563,7 @@ out="$tmp/doc.md"
     }
     print
   }' "$root/$template" > "$out"
-printf '<!-- delivery: content=%s homepage=%s -->\n' "$D" "$H" >> "$out"
+printf '<!-- delivery: content=%s homepage=%s qodo-open=%s -->\n' "$D" "$H" "$qodo_open" >> "$out"
 
 if (( check )); then
   differs=0
@@ -588,7 +585,7 @@ if (( check )); then
     echo "delivery doc $name is not current; run scripts/generate-delivery.sh --pr $pr" >&2
     exit 1
   fi
-  echo "$name is current (content $D, homepage $H, changed $changed)"
+  echo "$name is current (content $D, homepage $H, changed $changed, qodo-open $qodo_open)"
   exit 0
 fi
 
@@ -599,4 +596,4 @@ elif (( need_snap )); then
 fi
 mkdir -p "$(dirname "$doc")"
 cp "$out" "$doc"
-echo "wrote $name (content $D, homepage $H, changed $changed)"
+echo "wrote $name (content $D, homepage $H, changed $changed, qodo-open $qodo_open)"

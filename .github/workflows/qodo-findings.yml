@@ -1,0 +1,56 @@
+name: Qodo findings
+
+# AGENTS.md rule 9: sets the qodo-findings commit status on each PR head. Success when
+# Qodo's latest review of the head lists no open findings, failure while it lists any,
+# pending until Qodo has reviewed the head. Every trigger runs this file and the scripts
+# from main. PR code is never checked out or run, so the write token never meets it.
+on:
+  issue_comment:
+    # Qodo edits its one review comment on each re-review and on each closed finding;
+    # an edit is not a push, so no pull_request event fires.
+    types: [created, edited, deleted]
+  pull_request_target:
+    # A new head gets a status at once; Renovate PRs get success (exempt).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # Qodo's review is an issue comment on the PR.
+  issues: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  # One run per PR; a newer event (a Qodo edit) cancels a run still waiting to settle.
+  group: qodo-findings-${{ github.event.issue.number || github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  post-status:
+    if: >-
+      github.repository == 'lioramilbaum/lioramilbaum.github.io' &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        # No ref: main's tip. PR commits are fetched as objects for the content digest
+        # (scripts/qodo-status.sh --fetch), never checked out.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set the qodo-findings status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number || github.event.pull_request.number || inputs.pr }}
+        run: bash scripts/qodo-gate.sh --pr "$PR" --fetch origin

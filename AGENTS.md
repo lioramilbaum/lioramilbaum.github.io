@@ -9,7 +9,7 @@ Personal portfolio site for Liora Milbaum, hosted at [lioramilbaum.com](https://
 
 ## Setup
 
-The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access. `scripts/check-workflows.sh` needs Docker only (`--network none`). `scripts/check-browser.sh` needs Docker and network (`npm ci` installs Playwright in the container from `scripts/check-browser/package-lock.json`, which pins the npm tarballs by integrity; its version must match the image's). It serves the site inside the container, so unlike the screenshot step it also works on native Linux Docker. `scripts/check-links.sh` needs network. The delivery-doc skill (`scripts/generate-delivery.sh`) needs an authenticated `gh`, `python3` (it serves the head build on 127.0.0.1 for the screenshots), `curl`, and Docker; `scripts/test-delivery.sh` also needs `jq`. The screenshot step is verified on Docker Desktop (macOS); on native Linux Docker, the preview server bound to 127.0.0.1 is not reachable through host-gateway, and that path is not supported.
+The site build (`scripts/build-site.sh`) requires Docker only. No GitHub token or network access is needed for it: the build runs with `--network none`, and `_config.yml` pins `url` and `baseurl` so jekyll-github-metadata never calls the GitHub API. The build image is amd64-only (it runs under emulation on Apple Silicon). Screenshots (`scripts/snapshot-site.sh`) are the exception: they need Docker and network access. `scripts/check-workflows.sh` needs Docker only (`--network none`). `scripts/check-browser.sh` needs Docker and network (`npm ci` installs Playwright in the container from `scripts/check-browser/package-lock.json`, which pins the npm tarballs by integrity; its version must match the image's). It serves the site inside the container, so unlike the screenshot step it also works on native Linux Docker. `scripts/check-links.sh` needs network. The delivery-doc skill (`scripts/generate-delivery.sh`) needs an authenticated `gh`, `python3` (it serves the head build on 127.0.0.1 for the screenshots), `curl`, and Docker; `scripts/test-delivery.sh` also needs `jq`. `scripts/qodo-status.sh` needs an authenticated `gh` too. `scripts/qodo-gate.sh` posts a commit status (a token with statuses write). It runs in CI from main; to re-run it, dispatch the workflow. The screenshot step is verified on Docker Desktop (macOS); on native Linux Docker, the preview server bound to 127.0.0.1 is not reachable through host-gateway, and that path is not supported.
 
 ## Verify
 
@@ -32,7 +32,7 @@ scripts/snapshot-site.sh http://host.docker.internal:4000 _snapshots
 # Check that the hackathon page's external links resolve (network needed; run scripts/build-site.sh first). CI runs this too, as a non-blocking step: a dead link warns.
 bash scripts/check-links.sh
 
-# Parse the workflow files and check the yearly deploy schedule (Docker, no network)
+# Parse the workflow files, check the yearly deploy schedule, and check qodo-findings.yml's triggers and permissions (Docker, no network)
 scripts/check-workflows.sh
 
 # Browser check of the hackathon page: JavaScript off, light and dark contrast (Docker and network; build first)
@@ -44,8 +44,14 @@ bash scripts/test-delivery.sh
 # Docker test: the snapshot script rejects a page that only the browser sees as 404
 bash scripts/test-delivery.sh --snapshot
 
-# Check the PR's delivery doc is current for its head (run on the branch, after CI and Qodo review)
+# Check the PR's delivery doc is current for its head (run on the branch, after CI, Qodo review and triage; rule 9)
 scripts/generate-delivery.sh --pr 21 --check
+
+# Is Qodo done reviewing the PR head, and how many findings does it list (`open:`)? (exit 0 settled, 2 waiting, 3 stale, 4 no review)
+scripts/qodo-status.sh --pr 46
+
+# Post the qodo-findings status on PR 46 now (maintainers; posts a commit status)
+gh workflow run "Qodo findings" --repo lioramilbaum/lioramilbaum.github.io -f pr=46
 
 # Read Qodo's review of a PR, including findings it has since cleared.
 # Set n to the PR number (21 is an example).
@@ -92,7 +98,7 @@ Keep the four `##` topic sections with exactly these names: **Platform Engineeri
 
 **Where:** `.github/workflows/*.yml`, `renovate.json`
 
-Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). The Playwright image in `scripts/snapshot-site.sh` is tracked by the regex in `renovate.json`; keep its `image="…:vX.Y.Z-noble@sha256:…"` form. `scripts/check-browser.sh` reads the image from that line; never copy the pin. `scripts/check-browser/package.json` and its `package-lock.json` pin Playwright's npm package to the same version as that image; the lockfile pins the tarballs by integrity. Renovate moves the image and the npm package together in one PR (the `Playwright` group), and `scripts/check-browser.sh` fails if the versions differ. If a Renovate PR fails check-browser.sh's version check, one side (the image or the npm package) isn't published yet; the next run picks it up. `scripts/snapshot-site.sh` still installs its package by version only. Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
+Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/build-site.sh` parses that comment to find the image tag — keep its format (`# vX.Y.Z`). The Playwright image in `scripts/snapshot-site.sh` is tracked by the regex in `renovate.json`; keep its `image="…:vX.Y.Z-noble@sha256:…"` form. `scripts/check-browser.sh` reads the image from that line; never copy the pin. `scripts/check-browser/package.json` and its `package-lock.json` pin Playwright's npm package to the same version as that image; the lockfile pins the tarballs by integrity. Renovate moves the image and the npm package together in one PR (the `Playwright` group), and `scripts/check-browser.sh` fails if the versions differ. If a Renovate PR fails check-browser.sh's version check, one side (the image or the npm package) isn't published yet; the next run picks it up. `scripts/snapshot-site.sh` still installs its package by version only. Runners must be `ubuntu-26.04`, never `-latest`. Permissions stay least-privilege. Only `qodo-findings.yml` may request `statuses: write` or use `pull_request_target`. It checks out main only, with `persist-credentials: false`, uses no action but checkout, and passes every expression to `run:` through `env:`. `scripts/check-workflows.sh` asserts this. Do not bump pins by hand; Renovate groups and automerges them after CI passes.
 
 *Why:* A site about supply-chain integrity should practice what it describes. Pinning by SHA prevents silent tag moves.
 
@@ -102,7 +108,7 @@ Every `uses:` must be a 40-character SHA with a `# vX.Y.Z` comment. `scripts/bui
 
 Every PR adds one `deliveries/<YYYY-MM-DD>-<slug>.md`: the date the PR opens, and the branch name without its type prefix (`feat/site-snapshots` → `2026-11-05-site-snapshots.md`). The delivery-doc skill generates it locally with `scripts/generate-delivery.sh`, from `deliveries/TEMPLATE.md`. The Why, How, What, Assistance and third-party material, and Limitations sections are copied verbatim from the PR description (`.github/pull_request_template.md`). Evidence comes from the CI run, the two homepage builds, and Qodo's review comment with its edit history, so findings Qodo clears later are still recorded. Nothing is written by hand. The skill amends the doc into the PR's single commit and force-pushes.
 
-CI runs `scripts/check-delivery.sh` on the PR's own doc. It asks two questions. Does the doc exist? If not, CI posts a warning and stays green. Was it generated for this exact code, the head's content digest (the tree without the doc and its screenshot)? If not, CI is red. CI does not check the doc's sections, the homepage, the screenshot, or the Qodo and CI-run evidence: those are only as current as the last skill run. The check is advisory, not a ruleset. Renovate PRs are exempt. The process ends 2026-12-12 23:00 UTC (end of Dec 12 CET); after that, the check passes without reading the doc. Existing docs are never changed.
+CI runs `scripts/check-delivery.sh` on the PR's own doc. It asks three questions. Does the doc exist? If not, CI posts a warning and stays green. Was it generated for this exact code, the head's content digest (the tree without the doc and its screenshot)? If not, CI is red. Did Qodo's latest review of that content list no open findings when the doc was generated (`qodo-open=0`, rule 9)? If not, CI is red. CI does not check the doc's sections, the homepage, the screenshot, or the CI-run evidence, and it does not re-read Qodo: those are only as current as the last skill run. The check is advisory, not a ruleset. Renovate PRs are exempt. The process ends 2026-12-12 23:00 UTC (end of Dec 12 CET); after that, the check passes without reading the doc. Existing docs are never changed.
 
 *Why:* Each PR is a delivery in the Qodo Software Factory hackathon, and the doc is the evidence posted to the daily discussion. Hand-written evidence drifted from the commits it described. Generated evidence is keyed to content digests, so CI can check it.
 
@@ -126,8 +132,48 @@ CI must exercise every line of code the PR adds or changes. Code already on `mai
 
 *Why:* PR #34 (issue #27) first relied on one-off mutation runs, a by-hand link check and a manual browser check, so the owner required CI coverage for every line. The rule covers only new and changed lines, so code already on `main` whose real-world behaviour CI can't reproduce, such as the real GitHub responses behind `scripts/generate-delivery.sh`'s `gh` calls, doesn't break it. Test code is exempt so that tests don't need tests of their own; running in CI is what keeps it honest.
 
+### 9. Every Qodo finding is fixed or dismissed before the PR merges
+
+**Where:** Qodo's "Code Review by Qodo" comment on each PR, the `## Qodo notes` section of the PR description, `.claude/skills/delivery-doc/SKILL.md`, `scripts/generate-delivery.sh`, `scripts/check-delivery.sh`, `scripts/qodo-status.sh`, `scripts/qodo-review.awk`, `scripts/qodo-gate.sh`, `.github/workflows/qodo-findings.yml`, and the ruleset on main
+
+A PR is ready to merge only when Qodo's latest review of its head lists no open findings. `scripts/qodo-status.sh --pr N` reports whether Qodo's latest review names the head (or the same content) and has been quiet for 5 minutes; the delivery-doc skill uses it to wait. Qodo is configured in its own dashboard (app.qodo.ai), including the review rules imported from this file and those added by hand. The repo has no Qodo config file. If one is ever added, it goes in `_config.yml`'s `exclude:` block (rule 4). A finding is open while Qodo's managed tools (`get-pr-review-findings`) report it as pending, partial_implementation, not_implemented or focus_areas_edited; closed findings disappear from Qodo's comment. The owner merges; the agent never does, and never reports a PR as ready while a finding is open. Close each finding in one of two ways:
+
+- **Fix it.** Push the fix and wait for Qodo's re-review. If Qodo still lists the finding once the fix is on the PR head, mark it implemented (`pr-review-mark-implemented`). Never mark a finding implemented before its fix is pushed.
+- **Dismiss it** (`pr-review-dismiss`) with a reason (false_positive, intentional, deferred or rejected) and an explanation that cites evidence: the code at the head, a command and its output, or the revision the finding was raised against. The agent may dismiss a false_positive on its own. Intentional, deferred and rejected need the owner's approval, as does dismissing any High finding. Record each dismissal and its reason in the PR description's `## Qodo notes` section, so the delivery doc carries it.
+
+The `qodo-findings` commit status enforces this on every PR, with no end date. `.github/workflows/qodo-findings.yml` runs `scripts/qodo-gate.sh` from main when a PR head changes and when a comment on the PR changes, which covers Qodo's re-reviews and every finding closed in Qodo. The status is success when Qodo's latest review names the head (or the same content), has been quiet for 5 minutes and lists no open findings. It is failure while the review lists any, or lists none in a layout `scripts/qodo-review.awk` does not know. It is pending while Qodo has not reviewed the head, or the PR is a draft. It is error when the gate could not read the PR or Qodo's review; re-run it by dispatching the Qodo findings workflow (see Verify). After a force-push, the reviewed commit may no longer be fetchable (the old head is pruned from the clone and from the remote), so the status is pending (stale) until Qodo re-reviews the new head. That fails closed and heals itself. Renovate PRs get success (exempt), so automerge isn't blocked. A ruleset on main requires the status from GitHub Actions (integration 15368), with no bypass. The ruleset is not created yet; the owner creates it after this PR merges, in this order:
+
+1. Create it from the JSON below with `"enforcement": "evaluate"`. Evaluate mode reports what the rule would block without blocking anything.
+2. Confirm on a real PR that the `qodo-findings` status satisfies the rule: rule insights show it passing, with the source pinned to GitHub Actions (integration 15368). If the status is posted with GITHUB_TOKEN and the pin does not match it, drop `integration_id` from the JSON rather than block every PR.
+3. Only then change `"enforcement"` to `"active"`, which blocks merges that lack the status.
+
+The JSON for step 1; step 3 changes only its `enforcement`:
+
+```json
+{
+  "name": "qodo-findings",
+  "target": "branch",
+  "enforcement": "evaluate",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [{ "context": "qodo-findings", "integration_id": 15368 }]
+      }
+    }
+  ]
+}
+```
+
+Clear the findings before the final delivery-doc run (rule 6), not after: closing a finding rewrites Qodo's comment and makes the doc stale. The generator records how many findings Qodo's latest review of the head's content lists (`qodo-open=` in the doc's metadata line), and CI's delivery-doc job is red unless it is 0. `qodo-open=unknown` means Qodo's latest review of the head has no finding the generator can parse, and not every group says it is clear: the agent stops and reports it to the owner, who decides whether `scripts/qodo-review.awk` needs a change. It is not a wait and not a triage. The doc's `qodo-open` is fixed when the doc is generated; the `qodo-findings` status is re-read on every Qodo edit, so a finding Qodo adds later turns it red, and the skill's final `--check` catches the same change in the doc. If three re-reviews in a row each add a new finding, or after three regenerations, the agent stops and hands the open list to the owner. Renovate PRs are exempt: Qodo does not review them, and they automerge after CI passes (rule 5). The delivery-doc job's `qodo-open` check ends with the delivery window (rule 6); the `qodo-findings` status does not.
+
+*Why:* On PR #34 (issue #27), Qodo added findings on almost every re-review. The final delivery doc listed three as open; they were closed (two dismissed, one marked implemented) at 06:47Z on 2026-11-08, after the doc was generated and a minute before the merge, so the merged doc still shows them open. The owner then required every finding to be closed before merge, and triage to come before the doc.
+
 ## Workflow
 
 Conventional commit prefixes: `feat`, `fix`, `docs`, `chore`, `ci`. One commit per PR.
 
-After CI and Qodo have reviewed a PR, run the delivery-doc skill (`.claude/skills/delivery-doc/SKILL.md`). It generates the doc and amends the single commit. Qodo re-reviews each force-pushed commit, usually within a minute; the doc's digest check confirms the review matches the head. Mark a draft ready first: Qodo does not review drafts.
+After CI and Qodo have reviewed a PR, clear Qodo's findings (rule 9), then run the delivery-doc skill (`.claude/skills/delivery-doc/SKILL.md`), which does both in that order. It generates the doc and amends the single commit. Qodo re-reviews each force-pushed commit, usually within a minute; the doc's digest check confirms the review matches the head. Mark a draft ready first: Qodo does not review drafts. A PR is ready to merge when the `qodo-findings` status on its head is success.
