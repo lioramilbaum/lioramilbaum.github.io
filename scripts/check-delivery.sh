@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # AGENTS.md rule 6: checks the PR's own delivery doc against the PR head. It asks
-# two questions. Does the doc exist? If not, CI warns and passes. Was the doc
+# three questions. Does the doc exist? If not, CI warns and passes. Was the doc
 # generated for this head's content digest (the tree without the doc and its
-# screenshots)? If not, it fails. Once the delivery window has ended, the check
-# passes without reading the doc. Renovate PRs are skipped in the workflow.
+# screenshots)? If not, it fails. Did Qodo's latest review of that content list no
+# open findings (qodo-open=0, AGENTS.md rule 9)? If not, it fails. Once the delivery
+# window has ended, the check passes without reading the doc. Renovate PRs are
+# skipped in the workflow.
 #
 # Usage: scripts/check-delivery.sh                 (CI: the PR's doc, from the environment)
 #        scripts/check-delivery.sh --digest COMMIT DOC
@@ -83,11 +85,24 @@ if ! git cat-file -e "$HEAD_SHA:$doc" 2>/dev/null; then
   exit 0
 fi
 
-recorded=$(git show "$HEAD_SHA:$doc" | tr -d '\r' \
-  | sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) .*-->$/\1/p' | tail -n1)
+# The metadata is the doc's last "<!-- delivery:" line. Its digest and qodo-open come from
+# that one line, so an earlier line cannot supply a value the last line lacks.
+meta=$(git show "$HEAD_SHA:$doc" | tr -d '\r' | grep '^<!-- delivery: ' | tail -n1 || true)
+recorded=$(printf '%s\n' "$meta" | sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) .*-->$/\1/p')
 [[ -n "$recorded" ]] || fail "$doc" "no delivery metadata comment; run scripts/generate-delivery.sh (AGENTS.md rule 6)"
 
 want=$(digest "$HEAD_SHA" "$doc")
 [[ "$recorded" == "$want" ]] \
   || fail "$doc" "stale: the doc was generated for content $recorded but $HEAD_SHA has content $want; run scripts/generate-delivery.sh and amend the doc"
-echo "$doc: ok (content $want)"
+
+qodo=$(printf '%s\n' "$meta" \
+  | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} .* qodo-open=(none|other|unknown|[0-9]+) -->$/\1/p')
+case "$qodo" in
+  0) ;;
+  "") fail "$doc" "the doc records no Qodo state; regenerate it (AGENTS.md rule 9)" ;;
+  none) fail "$doc" "Qodo had not reviewed this PR when the doc was generated; mark it ready, wait for Qodo's review and regenerate (AGENTS.md rule 9)" ;;
+  other) fail "$doc" "Qodo's latest review was of other content when the doc was generated; wait for Qodo to review the head and regenerate (AGENTS.md rule 9)" ;;
+  unknown) fail "$doc" "Qodo's latest review could not be read when the doc was generated: it has no finding the generator can parse, and not every group says it is clear; a new layout belongs in scripts/qodo-review.awk (AGENTS.md rule 9)" ;;
+  *) fail "$doc" "Qodo's latest review listed $qodo open finding(s) when the doc was generated; fix or dismiss them and regenerate (AGENTS.md rule 9)" ;;
+esac
+echo "$doc: ok (content $want, no open Qodo findings)"
