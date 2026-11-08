@@ -148,7 +148,7 @@ while IFS= read -r -d '' html; do
   done < <(grep -oE '<meta property="og:image" content="[^"]*">' "$html" | sed -E 's/.*content="([^"]*)">/\1/')
 done < <(find "$site" -name '*.html' -print0)
 
-for repo_only in CNAME scripts deliveries .claude AGENTS.md AGENTS.html; do
+for repo_only in CNAME scripts deliveries .claude .github AGENTS.md AGENTS.html; do
   test ! -e "$site/$repo_only" || fail "repo-only path published: $repo_only" _config.yml
 done
 

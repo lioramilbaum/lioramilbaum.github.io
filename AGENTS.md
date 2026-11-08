@@ -172,7 +172,20 @@ Clear the findings before the final delivery-doc run (rule 6), not after: closin
 
 *Why:* On PR #34 (issue #27), Qodo added findings on almost every re-review. The final delivery doc listed three as open; they were closed (two dismissed, one marked implemented) at 06:47Z on 2026-11-08, after the doc was generated and a minute before the merge, so the merged doc still shows them open. The owner then required every finding to be closed before merge, and triage to come before the doc.
 
+### 10. Every issue has acceptance criteria before work starts; its PR carries them
+
+**Where:** issues on `lioramilbaum/lioramilbaum.github.io`, `.github/ISSUE_TEMPLATE/change.md`, the `## Acceptance criteria` section of the PR description (`.github/pull_request_template.md`)
+
+- No work starts on an issue (no plan, branch or code) until the issue has an `## Acceptance criteria` section: a checklist in which every item is checkable, an observable result or a test that passes or fails.
+- An agent picking up an issue reads it first (`gh issue view N -R lioramilbaum/lioramilbaum.github.io`). If it has no such section, or a criterion can't be checked, the agent may propose draft criteria, but it waits until the owner approves them and they are in the issue. It never treats its own draft as approved. A list under another heading (such as `## Done when`) counts once the owner renames it.
+- The PR that closes the issue copies the checklist, and only the checklist, into its `## Acceptance criteria` section next to `Closes #N`, so the reviewer sees the request beside the change. A PR with no linked issue writes `No linked issue.` there.
+- Renovate's Dependency Dashboard and Renovate PRs are exempt. CI does not check this; the delivery doc does not copy the section.
+
+*Why:* The Qodo Software Factory hackathon's Day 3 challenge asks every PR description to carry the ticket link and its acceptance criteria. PRs #25 (issue #24) and #34 (issue #27) linked their issues but not the criteria; Qodo found its requirement gaps only by reading the linked issues.
+
 ## Workflow
+
+Before starting an issue, read it and confirm it has acceptance criteria (rule 10).
 
 Conventional commit prefixes: `feat`, `fix`, `docs`, `chore`, `ci`. One commit per PR.
 
