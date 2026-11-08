@@ -30,12 +30,17 @@
       "platformAutomerge": false
     },
     {
-      "description": "Automerge non-major Playwright image updates once check-site passes",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["mcr.microsoft.com/playwright"],
+      "description": "Automerge non-major Playwright image and npm updates once check-site passes",
+      "matchManagers": ["custom.regex", "npm"],
+      "matchDepNames": ["mcr.microsoft.com/playwright", "playwright"],
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "automerge": true,
       "platformAutomerge": false
+    },
+    {
+      "description": "Move the Playwright image and the npm playwright package in one PR, so the lockfile version matches the image",
+      "matchDepNames": ["mcr.microsoft.com/playwright", "playwright"],
+      "groupName": "Playwright"
     }
   ]
 }
