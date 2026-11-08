@@ -60,6 +60,12 @@ jobs:
         shell: bash
         run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
+      - name: Test the agent runner
+        # Offline: scripts/agent-run.sh against stubs of docker, gh, claude, the checks and qodo-status.sh,
+        # and build-site.sh's directory argument against a docker stub.
+        shell: bash
+        run: bash scripts/test-agent.sh
+
       - name: Test delivery scripts
         # Tests the generator and the check themselves, so it runs on Renovate PRs too.
         shell: bash
