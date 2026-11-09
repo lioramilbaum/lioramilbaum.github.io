@@ -1,0 +1,65 @@
+name: Agent run
+
+# Runs scripts/agent-run.sh on an issue the owner labels ready-for-agent (AGENTS.md Setup). The
+# job runs only for the owner's labelling of the owner's own issue, never for a pull request.
+# It runs main's copy of the runner and scripts, never a PR's. Three Actions secrets:
+# CLAUDE_CODE_OAUTH_TOKEN (the model), AGENT_FORK_TOKEN (pushes the branch to the owner's fork,
+# contents write) and AGENT_PR_TOKEN (opens the PR and labels the issue upstream). The runner
+# holds the tokens in its own process. The model is Claude Code, run by the runner with only PATH,
+# a throwaway HOME and its OAuth token in its environment, with restricted mode and allow and deny
+# rules (AGENTS.md Setup lists them and the residual risks). The checks run in a container with no
+# network and no secret in its environment. check-workflows.sh pins this file.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One agent run at a time: two runs would race for the same branch names.
+  group: agent-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.repository == 'lioramilbaum/lioramilbaum.github.io' &&
+      github.event.label.name == 'ready-for-agent' &&
+      github.event.sender.login == 'lmilbaum' &&
+      github.event.issue.user.login == 'lmilbaum' &&
+      !github.event.issue.pull_request
+    runs-on: ubuntu-26.04
+    # Three Qodo rounds of up to 20 minutes each, plus the checks and the model's calls.
+    timeout-minutes: 180
+    steps:
+      - name: Checkout main
+        # No ref: main's tip, so the runner and its prompt are main's, not a PR's.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The runner branches from upstream main and reads its history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # @anthropic-ai/claude-code's engines need Node 22 or later (scripts/agent/package-lock.json).
+          node-version: 24
+
+      - name: Install jq
+        shell: bash
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+
+      - name: Install Claude Code
+        # The version is pinned in scripts/agent/package-lock.json. The runner runs this copy of
+        # Claude Code from its private directory.
+        run: npm ci --prefix scripts/agent
+
+      - name: Run the agent
+        env:
+          ISSUE: ${{ github.event.issue.number }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          AGENT_FORK_TOKEN: ${{ secrets.AGENT_FORK_TOKEN }}
+          AGENT_PR_TOKEN: ${{ secrets.AGENT_PR_TOKEN }}
+        run: bash scripts/agent-run.sh --issue "$ISSUE"

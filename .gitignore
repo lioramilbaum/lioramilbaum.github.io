@@ -1,2 +1,4 @@
 _site/
 _snapshots/
+# The agent run's dependencies (npm ci); the runner stages the clone with git add -A.
+scripts/agent/node_modules/

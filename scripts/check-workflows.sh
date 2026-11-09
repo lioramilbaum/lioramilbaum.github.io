@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Parses the workflow files, checks the yearly deploy schedule, and checks who may write
 # statuses or run on pull_request_target (AGENTS.md rule 5): only qodo-findings.yml, whose
-# triggers and permissions are pinned here. Docker only, no network: the Ruby runs in the
+# triggers and permissions are pinned here. agent-run.yml (AGENTS.md Setup) is pinned too: its
+# trigger, guard, permissions and steps. Docker only, no network: the Ruby runs in the
 # jekyll-build-pages image that the build step pulls, so it uses the same YAML library CI
 # does. The image is amd64-only. --user keeps the container from writing as root; the
 # workflows mount is read-only.
@@ -40,6 +41,7 @@ end
 files = (Dir.glob("/w/*.yml") + Dir.glob("/w/*.yaml")).sort
 abort "error: no workflow files found" if files.empty?
 report.call("qodo-findings.yml", "is missing; the qodo-findings status is not set") unless files.any? { |f| File.basename(f) == "qodo-findings.yml" }
+report.call("agent-run.yml", "is missing; the agent run is not pinned") unless files.any? { |f| File.basename(f) == "agent-run.yml" }
 
 files.each do |path|
   name = File.basename(path)
@@ -113,6 +115,90 @@ files.each do |path|
     end
     triggers = on.is_a?(Hash) ? on.keys : Array(on)
     report.call(name, "runs on pull_request_target; only qodo-findings.yml may") if triggers.include?("pull_request_target")
+  end
+
+  # agent-run.yml runs the agent on the owner's labels (AGENTS.md Setup). Its trigger, guard,
+  # permissions and steps are pinned here; the checks above apply to it as to every other workflow.
+  if name == "agent-run.yml"
+    report.call(name, "on: is not exactly issues with types [labeled]") unless on.is_a?(Hash) && on.keys == ["issues"] && on["issues"] == { "types" => ["labeled"] }
+    report.call(name, "top-level permissions are not exactly contents: read") unless w["permissions"] == { "contents" => "read" }
+    report.call(name, "has a workflow-level env or defaults; the three secrets are set on the run step only") if w.key?("env") || w.key?("defaults")
+    conc = w["concurrency"].is_a?(Hash) ? w["concurrency"] : {}
+    report.call(name, "concurrency.cancel-in-progress is not false") unless conc["cancel-in-progress"] == false
+    report.call(name, "does not have exactly one job") unless jobs.size == 1
+    jobs.each do |jid, job|
+      next report.call(name, "job #{jid} is not a mapping") unless job.is_a?(Hash)
+      report.call(name, "job #{jid} runs-on is not ubuntu-26.04") unless job["runs-on"] == "ubuntu-26.04"
+      report.call(name, "job #{jid} timeout-minutes is not 180 (three Qodo rounds of 20 minutes, the checks and the model's calls)") unless job["timeout-minutes"] == 180
+      report.call(name, "job #{jid} has its own permissions") if job.key?("permissions")
+      report.call(name, "job #{jid} has its own env or defaults; the three secrets are set on the run step only") if job.key?("env") || job.key?("defaults")
+      job_if = job["if"].to_s
+      # The guard is exactly these && terms, in this order (whitespace collapsed): a term inside a string,
+      # such as format('...'), or an extra term, such as && true, is a different guard.
+      guard_if = [
+        "github.repository == 'lioramilbaum/lioramilbaum.github.io'",
+        "github.event.label.name == 'ready-for-agent'",
+        "github.event.sender.login == 'lmilbaum'",
+        "github.event.issue.user.login == 'lmilbaum'",
+        "!github.event.issue.pull_request",
+      ].join(" && ")
+      report.call(name, "job #{jid} if is not exactly #{guard_if}") unless job_if.gsub(/\s+/, " ").strip == guard_if
+      report.call(name, "job #{jid} if has ||; the guard is only && terms, so a second branch cannot pass it") if job_if.include?("||")
+      # The steps are pinned in order, each with exactly these keys, so a step cannot be added, moved, or given
+      # an if, working-directory or continue-on-error. The uses pins are checked below.
+      pinned_steps = [
+        { "uses" => "actions/checkout@", "keys" => %w[name uses with] },
+        { "uses" => "actions/setup-node@", "keys" => %w[name uses with] },
+        { "run" => "command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }", "keys" => %w[name shell run] },
+        { "run" => "npm ci --prefix scripts/agent", "keys" => %w[name run] },
+        { "run" => 'bash scripts/agent-run.sh --issue "$ISSUE"', "keys" => %w[name env run] },
+      ]
+      actual_steps = Array(job["steps"])
+      in_order = actual_steps.size == pinned_steps.size && actual_steps.zip(pinned_steps).all? { |s, p|
+        s.is_a?(Hash) && s.keys.sort == p["keys"].sort && (p.key?("uses") ? s["uses"].to_s.start_with?(p["uses"]) : s["run"].to_s.strip == p["run"]) && (!s.key?("shell") || s["shell"] == "bash")
+      }
+      report.call(name, "job #{jid} steps are not exactly checkout, setup-node, the jq install, npm ci and the agent run, in that order, with no other keys") unless in_order
+      steps = Array(job["steps"]).select { |s| s.is_a?(Hash) }
+      steps.select { |s| s.key?("uses") }.each do |s|
+        uses = s["uses"].to_s
+        report.call(name, "job #{jid} uses #{uses}; only actions/checkout and actions/setup-node are allowed") unless uses.start_with?("actions/checkout@", "actions/setup-node@")
+        report.call(name, "job #{jid} uses #{uses}, not a 40-character SHA") unless uses.match?(/@[0-9a-f]{40}\z/)
+      end
+      checkout = steps.find { |s| s["uses"].to_s.start_with?("actions/checkout@") } || {}
+      with = checkout["with"].is_a?(Hash) ? checkout["with"] : {}
+      report.call(name, "job #{jid} has no actions/checkout step") if checkout.empty?
+      report.call(name, "job #{jid} checkout does not set persist-credentials: false") unless with["persist-credentials"] == false
+      report.call(name, "job #{jid} checkout sets ref or repository") if with.key?("ref") || with.key?("repository")
+      setup = steps.find { |s| s["uses"].to_s.start_with?("actions/setup-node@") } || {}
+      report.call(name, "job #{jid} has no actions/setup-node step") if setup.empty?
+      setup_with = setup["with"].is_a?(Hash) ? setup["with"] : {}
+      # An integer major version: lts/*, a range and a full version fail. The claude-code engines need
+      # Node 22 or later (scripts/agent/package-lock.json).
+      node_version = setup_with["node-version"].to_s
+      report.call(name, "job #{jid} setup-node node-version is not an integer major version of 22 or later (the claude-code engines need 22 or later)") unless node_version.match?(/\A[0-9]+\z/) && node_version.to_i >= 22
+      report.call(name, "job #{jid} has no step that installs jq (the runner needs it)") unless steps.any? { |s| s["run"].to_s.include?("apt-get install -y jq") }
+      steps.select { |s| s.key?("run") }.each do |s|
+        report.call(name, "job #{jid} has a run: with an expression; pass it through env:") if s["run"].to_s.include?("${{")
+      end
+      agent = steps.find { |s| s["run"].to_s.include?("agent-run.sh") } || {}
+      report.call(name, "job #{jid} has no step that runs scripts/agent-run.sh") if agent.empty?
+      report.call(name, "job #{jid} run step is not exactly bash scripts/agent-run.sh --issue \"$ISSUE\"") unless agent["run"].to_s.strip == 'bash scripts/agent-run.sh --issue "$ISSUE"'
+      report.call(name, "job #{jid} run step env is not exactly ISSUE, CLAUDE_CODE_OAUTH_TOKEN, AGENT_FORK_TOKEN and AGENT_PR_TOKEN") unless agent["env"].is_a?(Hash) && agent["env"].keys.sort == ["AGENT_FORK_TOKEN", "AGENT_PR_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ISSUE"]
+      # Each variable's value is pinned, with whitespace removed from both sides: ISSUE is the issue number, and
+      # each token is its own secret. Two variables mapped to one secret, or a swapped pair, fails here.
+      expected_env = {
+        "ISSUE" => "${{ github.event.issue.number }}",
+        "CLAUDE_CODE_OAUTH_TOKEN" => "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+        "AGENT_FORK_TOKEN" => "${{ secrets.AGENT_FORK_TOKEN }}",
+        "AGENT_PR_TOKEN" => "${{ secrets.AGENT_PR_TOKEN }}",
+      }
+      squeeze = ->(h) { h.transform_values { |v| v.to_s.gsub(/\s+/, "") } }
+      report.call(name, "job #{jid} run step env is not exactly ISSUE, CLAUDE_CODE_OAUTH_TOKEN, AGENT_FORK_TOKEN and AGENT_PR_TOKEN, each mapped to its own value") unless agent["env"].is_a?(Hash) && squeeze.call(agent["env"]) == squeeze.call(expected_env)
+      # The secrets: exactly the three in the run step's env, and no other "secrets." anywhere in the file.
+      secret_envs = agent["env"].is_a?(Hash) ? agent["env"].values.select { |v| v.to_s.include?("secrets.") } : []
+      report.call(name, "job #{jid} run step env does not take exactly the three secrets") unless secret_envs.size == 3
+      report.call(name, "secrets. appears outside the run step's env (a step, a job or the workflow)") unless w.to_s.scan("secrets.").size == secret_envs.size
+    end
   end
 
   next unless name == "deploy-pages.yml"
