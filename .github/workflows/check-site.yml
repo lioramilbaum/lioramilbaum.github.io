@@ -100,16 +100,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The merge commit and its parents: the PR head is the second parent.
+          # The merge commit and its base-branch parent (HEAD^1): check-delivery.sh lists the PR's changes between them, and fetches a docs PR's merged head itself.
           fetch-depth: 2
           persist-credentials: false
 
       - name: Check the delivery doc
-        # Renovate PRs automerge once checks pass and carry no delivery doc.
+        # Renovate PRs are exempt (AGENTS.md rule 6): they get no delivery doc, before or after the merge, and automerge once checks pass.
         if: github.event.pull_request.user.login != 'renovate[bot]'
         shell: bash
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: bash scripts/check-delivery.sh

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# AGENTS.md rule 6: writes a PR's delivery doc, deliveries/<PR open date>-<branch
+# AGENTS.md rule 6: writes a merged PR's delivery doc, deliveries/<PR open date>-<branch
 # slug>.md, from deliveries/TEMPLATE.md. Every section comes from the PR
 # description, CI runs, the builds, or Qodo's review comment. Nothing is written
-# by hand. The delivery-doc skill runs this and amends the doc into the PR commit.
-# The metadata line records how many findings Qodo's latest review lists (qodo-open,
-# AGENTS.md rule 9); check-delivery.sh fails unless it is 0.
+# by hand. The delivery-doc skill runs this after the PR merges and adds the doc in
+# a docs PR. It refuses a PR that has not merged.
+# The metadata line records the merged head (head=), its content digest, and how many
+# findings Qodo's final review lists (qodo-open, AGENTS.md rule 9). check-delivery.sh
+# checks the digest against the head on the docs PR; qodo-open is evidence there.
 #
-# Usage: scripts/generate-delivery.sh --pr N [--check]
+# Usage: scripts/generate-delivery.sh --pr N [--check] [--fetch REMOTE]
 #   --check  writes nothing; exits 1 and prints a diff if the doc would change.
+#   --fetch REMOTE (default upstream): a Check site run's commit this clone lacks is fetched by SHA from REMOTE.
 #
 # Test hooks: BUILD_SITE (default scripts/build-site.sh, run in each worktree),
 # SNAPSHOT (default scripts/snapshot-site.sh), AWK. gh is found on PATH.
 #
-# Choices that keep a re-run after an amend identical:
-# - CI evidence cites the earliest successful Check site run whose head has
-#   the same content digest, not the run for one SHA. An amend that only adds
-#   the doc keeps the digest, so the evidence does not move.
-# - Qodo's reviewed commits are listed by content digest, not SHA.
-# - The doc names no head SHA, so an amend does not change its text.
+# The doc records the final state: CI evidence cites the latest successful Check site
+# run whose head has the merged head's content digest, and Qodo's reviewed commits are
+# listed by content digest, not SHA.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -26,14 +26,16 @@ template=deliveries/TEMPLATE.md
 repo=lioramilbaum/lioramilbaum.github.io
 pr=""
 check=0
+fetch=upstream
 usage() {
-  echo "usage: scripts/generate-delivery.sh --pr N [--check]" >&2
+  echo "usage: scripts/generate-delivery.sh --pr N [--check] [--fetch REMOTE]" >&2
   exit 1
 }
 while [ $# -gt 0 ]; do
   case "$1" in
     --pr) pr=${2:-}; shift ;;
     --check) check=1 ;;
+    --fetch) [ $# -ge 2 ] && [ -n "$2" ] || usage; fetch=$2; shift ;;
     *) usage ;;
   esac
   shift
@@ -56,13 +58,29 @@ cleanup() {
 trap cleanup EXIT
 
 # section FILE NAME: prints the trimmed body of the first "## NAME" section of
-# FILE. Exits 1 if there is no such section. Headings inside code fences are
-# not special-cased, so a PR description should not use "## " inside a fence.
+# FILE. Exits 1 if there is no such section. Headings inside fenced code blocks (``` or
+# ~~~, CommonMark rules: indented at most 3 spaces, closed by the same character at least
+# as long with nothing after it) are not headings; an unclosed fence runs to the end.
+# Fence lines inside a section are part of its body.
 section() {
   # shellcheck disable=SC2016 # awk program, not the shell
   "$awk" -v name="$2" '
     { sub(/\r$/, "") }
-    /^## / {
+    {
+      t = $0; ind = 0
+      while (ind < 4 && substr(t, ind + 1, 1) == " ") ind++
+      c = substr(t, ind + 1, 1)
+      if (ind < 4 && (c == "`" || c == "~")) {
+        k = 0
+        while (substr(t, ind + k + 1, 1) == c) k++
+        rest = substr(t, ind + k + 1)
+        if (k >= 3) {
+          if (fc == "") { if (!(c == "`" && index(rest, "`"))) { fc = c; fk = k } }
+          else if (c == fc && k >= fk && rest ~ /^[ \t]*$/) fc = ""
+        }
+      }
+    }
+    fc == "" && /^## / {
       h = $0
       sub(/[ \t]+$/, "", h)
       on = (!found && h == "## " name)
@@ -107,8 +125,12 @@ labelled() {
 
 pr_field() { gh pr view "$pr" --repo "$repo" --json "$1" --jq ".$1"; }
 
+state=$(pr_field state)
+[[ "$state" == MERGED ]] \
+  || die "PR $pr is ${state:-of unknown state}, not merged; its delivery doc is generated after it merges (AGENTS.md rule 6)"
 title=$(pr_field title)
 created=$(pr_field createdAt)
+merged_at=$(pr_field mergedAt)
 ref=$(pr_field headRefName)
 head_sha=$(pr_field headRefOid)
 base_sha=$(pr_field baseRefOid)
@@ -118,6 +140,7 @@ strip_trailer "$tmp/pr-body.md"
 
 # Doc name: the PR open date (UTC, as GitHub reports it) and the branch name
 # without its type prefix (everything up to the first "/").
+[[ "$merged_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] || die "PR $pr has no usable mergedAt ($merged_at)"
 [[ "$created" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T ]] || die "PR $pr has no usable createdAt ($created)"
 date=${BASH_REMATCH[1]}
 case "$ref" in
@@ -234,20 +257,30 @@ capture() {
   fi
 }
 
-# CI evidence: the earliest completed Check site run on this branch whose head has
+# CI evidence: the final (latest) completed Check site run on this branch whose head has
 # content digest D and whose jobs all passed except delivery-doc. delivery-doc is left
-# out: it fails while a doc from earlier content is in the tree, so requiring it would
-# deadlock.
+# out: on PRs from before the docs moved to their own PR (AGENTS.md rule 6), it failed
+# while a doc from earlier content was in the tree. A run whose commit this clone lacks is
+# fetched by SHA; the generator stops if a run it could not fetch is newer than the one cited.
+# Runs created after the PR merged are ignored, since they belong to a later PR on a reused branch.
 runs=$(gh run list --repo "$repo" --branch "$ref" --workflow "Check site" --limit 100 \
   --json databaseId,headSha,status,url,createdAt,event \
   --jq '.[] | select(.event == "pull_request" and .status == "completed") | [.databaseId, .headSha, .url, .createdAt] | join("\t")') \
   || die "could not list Check site runs"
 run_id=""; run_sha=""; run_url=""; run_at=""; run_jobs=""
+absent_id=""; absent_sha=""; absent_at=""
 while IFS=$'\t' read -r id sha url at; do
   [[ -n "$id" ]] || continue
-  git cat-file -e "$sha^{commit}" 2>/dev/null || continue
+  if [[ "$at" > "$merged_at" ]]; then continue; fi
+  if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+    git fetch --quiet --no-tags -- "$fetch" "$sha" >/dev/null 2>&1 || true
+  fi
+  if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+    if [[ -z "$absent_at" || "$at" > "$absent_at" ]]; then absent_id=$id; absent_sha=$sha; absent_at=$at; fi
+    continue
+  fi
   [[ "$(bash "$root/scripts/check-delivery.sh" --digest "$sha" "$name")" == "$D" ]] || continue
-  if [[ -n "$run_at" && ! "$at" < "$run_at" ]]; then continue; fi
+  if [[ -n "$run_at" && ! "$at" > "$run_at" ]]; then continue; fi
   jobs_list=$(gh run view "$id" --repo "$repo" --json jobs --jq '.jobs | sort_by(.name) | .[] | [.name, .conclusion] | join("\t")') \
     || die "could not read the jobs of run $id"
   passed=1; counted=0; summary=""
@@ -262,6 +295,9 @@ while IFS=$'\t' read -r id sha url at; do
     run_id=$id; run_sha=$sha; run_url=$url; run_at=$at; run_jobs=$summary
   fi
 done <<< "$runs"
+if [[ -n "$absent_id" && ( -z "$run_at" || "$absent_at" > "$run_at" ) ]]; then
+  die "Check site run $absent_id ($absent_at) is on commit $absent_sha, which is not in this clone and could not be fetched from $fetch; it may be a later run on the merged content, so the final run is unknown. Fetch it and run this again"
+fi
 [[ -n "$run_id" ]] || die "no completed Check site run for content $D with every job except delivery-doc passing; wait for CI on the head and run this again"
 
 {
@@ -563,7 +599,7 @@ out="$tmp/doc.md"
     }
     print
   }' "$root/$template" > "$out"
-printf '<!-- delivery: content=%s homepage=%s qodo-open=%s -->\n' "$D" "$H" "$qodo_open" >> "$out"
+printf '<!-- delivery: content=%s head=%s homepage=%s qodo-open=%s -->\n' "$D" "$head_sha" "$H" "$qodo_open" >> "$out"
 
 if (( check )); then
   differs=0

@@ -224,6 +224,13 @@ commit_all() {  # commit_all MESSAGE
 
 head_sha() { git -C "$CASE" rev-parse HEAD; }
 
+# drop_from_clone CASE: expires the reflogs and prunes unreachable objects, so a commit that no
+# branch reaches is gone from the clone (as a commit a PR force-pushed over is).
+drop_from_clone() {
+  git -C "$1" reflog expire --expire=now --all
+  git -C "$1" gc -q --prune=now
+}
+
 body_full() {
   cat <<'BODY'
 ## Why
@@ -280,11 +287,15 @@ None known.
 BODY
 }
 
-# fx_pr HEAD_SHA BODY_FILE: the PR as gh would report it.
+# fx_pr HEAD_SHA BODY_FILE: the PR as gh would report it, merged (PR_STATE overrides).
+# mergedAt is 2026-11-06 unless PR_MERGED_AT is set (empty gives null): after every fixture run.
 fx_pr() {
-  jq -n --arg head "$1" --arg base "$BASE" --rawfile body "$2" '{
+  jq -n --arg head "$1" --arg base "$BASE" --arg state "${PR_STATE:-MERGED}" --rawfile body "$2" \
+    --arg merged "${PR_MERGED_AT-2026-11-06T00:00:00Z}" '{
+    state: $state,
     title: "Demo change",
     createdAt: "2026-11-05T09:00:00Z",
+    mergedAt: (if $merged == "" then null else $merged end),
     headRefName: "feat/demo-change",
     headRefOid: $head,
     baseRefOid: $base,
@@ -443,14 +454,14 @@ pr_case() {
   fx_qodo_none
 }
 
-# stale_case NAME: a PR whose doc was generated and committed, then a non-doc commit
-# made it stale.
+# stale_case NAME: a docs commit whose doc names a merged head with other content: the doc
+# was generated for the PR head, then its head= was pointed at the base commit.
 stale_case() {
   pr_case "$1" other plain
   gen "$CASE"
-  commit_all "delivery doc"
-  printf 'more\n' > "$CASE/notes.txt"
-  commit_all "a non-doc change after the doc"
+  sed -E "s/ head=[0-9a-f]{40} / head=$BASE /" "$CASE/$doc_name" > "$FX/stale.md"
+  cp "$FX/stale.md" "$CASE/$doc_name"
+  commit_all "a docs commit with a stale doc"
 }
 
 # gen CASE [ARGS]: runs generate-delivery.sh for PR 24 with the stubs. Output goes to
@@ -464,12 +475,13 @@ gen() {
   return 0
 }
 
-# check CASE HEAD_SHA [NOW] [GITHUB_ACTIONS]: runs check-delivery.sh for the case's PR
-# (created 2026-11-05, branch feat/demo-change). Sets CHECK_RC to its status.
+# check CASE [NOW] [GITHUB_ACTIONS]: runs check-delivery.sh in CASE as CI runs it on a PR:
+# HEAD is the PR and HEAD^1 its base. CHECK_BASE, if set, is passed as BASE_SHA. Sets
+# CHECK_RC to its status.
 check() {
   CHECK_RC=0
-  (cd "$1" && NOW="${3:-$NOW}" GITHUB_ACTIONS="${4:-}" HEAD_SHA="$2" PR_CREATED_AT=2026-11-05T09:00:00Z \
-    HEAD_REF=feat/demo-change bash scripts/check-delivery.sh) > "$FX/check.log" 2>&1 || CHECK_RC=$?
+  (cd "$1" && unset BASE_SHA && if [ -n "${CHECK_BASE:-}" ]; then export BASE_SHA=$CHECK_BASE; fi \
+    && NOW="${2:-$NOW}" GITHUB_ACTIONS="${3:-}" bash scripts/check-delivery.sh) > "$FX/check.log" 2>&1 || CHECK_RC=$?
   return 0
 }
 
@@ -531,14 +543,16 @@ else
   report "a. homepage changed: desktop.png written, embedded, 1280 px; no phone" 1 "$(cat "$FX/gen.log")"
 fi
 
-# a2. Digest agreement: the generated doc, committed, passes the check with the PR's
-# created time and branch.
+# a2. Digest agreement: the generated doc, committed alone as a docs PR, passes the check,
+# and its metadata names the merged head.
+a2_head=$(head_sha)
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
-if [ "$CHECK_RC" -eq 0 ] && grep -q 'ok (content' "$FX/check.log"; then
-  report "a2. digest agreement: check passes the generated doc" 0
+check "$CASE"
+if [ "$CHECK_RC" -eq 0 ] && grep -q 'ok (content' "$FX/check.log" \
+  && grep -qF "merged head $a2_head" "$FX/check.log" && grep -qF " head=$a2_head " "$CASE/$doc_name"; then
+  report "a2. digest agreement: check passes the generated doc, which names the merged head" 0
 else
-  report "a2. digest agreement: check passes the generated doc" 1 "$(cat "$FX/check.log")"
+  report "a2. digest agreement: check passes the generated doc, which names the merged head" 1 "$(cat "$FX/check.log")"
 fi
 
 # b. Unchanged homepage: no screenshot, the "no visible change" line, and no PNG dir.
@@ -561,7 +575,7 @@ else
   report "b. homepage unchanged: no PNG dir, no-change line" 1 "$(cat "$FX/gen.log")"
 fi
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$CHECK_RC" -eq 0 ]; then
   report "b2. check passes with no screenshot" 0
 else
@@ -577,27 +591,23 @@ else
   report "c. only profile.jpg bytes differ: changed" 1 "$(cat "$FX/gen.log")"
 fi
 
-# d. A non-doc commit after generation makes the doc stale: check fails with an
-# annotation; regenerating fixes it.
+# d. A doc whose merged head has other content is stale: check fails with an annotation;
+# regenerating from the merged PR fixes it.
 stale_case d
-h2=$(head_sha)
-h1=$(git -C "$CASE" rev-parse HEAD~2)
-check "$CASE" "$h2" "" 1
+check "$CASE" "" 1
 if [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'stale' "$FX/check.log"; then
-  report "d. stale doc after a non-doc commit fails with ::error" 0
+  report "d. a doc whose merged head has other content fails with ::error" 0
 else
-  report "d. stale doc after a non-doc commit fails with ::error" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+  report "d. a doc whose merged head has other content fails with ::error" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
-fx_pr "$h2" "$FX/body.md"
-fx_runs 101 "$h1" success success 102 "$h2" success success
-fx_qodo_clear "$h2"
+fx_qodo_clear "$(git -C "$CASE" rev-parse HEAD^1)"
 gen "$CASE"
 commit_all "regenerated doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$CHECK_RC" -eq 0 ]; then
-  report "d2. regenerated doc passes after the change" 0
+  report "d2. the doc regenerated from the merged PR passes" 0
 else
-  report "d2. regenerated doc passes after the change" 1 "$(cat "$FX/gen.log") $(cat "$FX/check.log")"
+  report "d2. the doc regenerated from the merged PR passes" 1 "$(cat "$FX/gen.log") $(cat "$FX/check.log")"
 fi
 
 # f. A missing required PR section fails clearly.
@@ -790,29 +800,123 @@ else
   report "r. several Qodo comments: the latest by createdAt is read" 1 "$(cat "$FX/gen.log")"
 fi
 
-# fp. Fixed point (AGENTS.md rule 6): an amend that adds the doc gives a new head with
-# the same content digest. A Qodo re-review on the new head, with an edit that shows
-# the earlier body, leaves the doc unchanged; the new head's short SHA appears nowhere
-# in it and CI run 101 (the earlier head) is still the cited run.
-pr_case fp home full
-s1=$(head_sha)
-review_body "$s1" medium 'u-keep-2|Delivery doc reports unverified results|📘 Rule violation' > "$FX/review-s1.md"
-fx_qodo "$FX/review-s1.md"
+# fin. The final CI run (AGENTS.md rule 6): two passing Check site runs on the merged head's
+# content; the doc cites the later one (102), not the earlier (101). A later failing run (103)
+# is not cited. --check then finds the doc current.
+pr_case fin home full
+fx_runs 101 "$(head_sha)" success success 102 "$(head_sha)" success success 103 "$(head_sha)" failure success
+fx_qodo_clear "$(head_sha)"
 gen "$CASE"
-fp_gen_rc=$GEN_RC
-git -C "$CASE" add -A
-git -C "$CASE" -c user.name=test -c user.email=t@example.invalid commit -q --amend --no-edit
-s2=$(head_sha)
-review_body "$s2" medium 'u-keep-2|Delivery doc reports unverified results|📘 Rule violation' > "$FX/review-s2.md"
-fx_pr "$s2" "$FX/body.md"
-fx_runs 101 "$s1" success success 102 "$s2" success success
-fx_qodo "$FX/review-s2.md" 2026-11-05T15:59:06Z "$FX/review-s1.md"
+fin_gen_rc=$GEN_RC
 gen "$CASE" --check
-if [ "$fp_gen_rc" -eq 0 ] && [ "$s1" != "$s2" ] && [ "$GEN_RC" -eq 0 ] && grep -q 'is current' "$FX/gen.log" \
-  && ! grep -qF "${s2:0:7}" "$CASE/$doc_name" && grep -qF "[run 101]" "$CASE/$doc_name"; then
-  report "fp. fixed point: amend and Qodo re-review leave the doc current; run 101 cited" 0
+if [ "$fin_gen_rc" -eq 0 ] && [ "$GEN_RC" -eq 0 ] && grep -q 'is current' "$FX/gen.log" \
+  && grep -qF "[run 102]" "$CASE/$doc_name" && ! grep -qF "[run 101]" "$CASE/$doc_name" \
+  && ! grep -qF "[run 103]" "$CASE/$doc_name"; then
+  report "fin. the latest passing CI run on the merged content is cited" 0
 else
-  report "fp. fixed point: amend and Qodo re-review leave the doc current; run 101 cited" 1 "$(cat "$FX/gen.log")"
+  report "fin. the latest passing CI run on the merged content is cited" 1 "$(cat "$FX/gen.log")"
+fi
+
+# fet. A Check site run whose commit is not in the clone is fetched by SHA from --fetch's remote and
+# cited. Run 102's commit G (the head's content, pushed to the remote under refs/pull/24/head and
+# pruned from the clone) is fetched, so the doc cites 102. --fetch with no value is a usage error.
+pr_case fet other plain
+fet_h=$(head_sha)
+fet_g=$(git -C "$CASE" -c user.name=test -c user.email=t@example.invalid commit-tree "$fet_h^{tree}" -p "$BASE" -m same-content)
+fet_remote=$tmp/fet-remote.git
+git init -q --bare "$fet_remote"
+git -C "$fet_remote" config uploadpack.allowAnySHA1InWant true
+git -C "$CASE" push -q "file://$fet_remote" "$fet_g:refs/pull/24/head"
+drop_from_clone "$CASE"
+fet_gone=no
+if ! git -C "$CASE" cat-file -e "$fet_g^{commit}" 2>/dev/null; then fet_gone=yes; fi
+fx_runs 101 "$fet_h" success success 102 "$fet_g" success success
+fx_qodo_clear "$fet_h"
+gen "$CASE" --fetch "file://$fet_remote"
+fet_a_rc=$GEN_RC; fet_a_log=$(cat "$FX/gen.log"); fet_a_ok=no
+if [ "$fet_a_rc" -eq 0 ] && grep -qF "[run 102]" "$CASE/$doc_name" && ! grep -qF "[run 101]" "$CASE/$doc_name"; then
+  fet_a_ok=yes
+fi
+gen "$CASE" --fetch
+fet_b_rc=$GEN_RC
+if [ "$fet_gone" = yes ] && [ "$fet_a_ok" = yes ] && [ "$fet_b_rc" -eq 1 ] && grep -qF 'usage:' "$FX/gen.log"; then
+  report "fet. a run's commit missing from the clone is fetched by SHA and cited; --fetch with no value is usage" 0
+else
+  report "fet. a run's commit missing from the clone is fetched by SHA and cited; --fetch with no value is usage" 1 "pruned $fet_gone; a rc $fet_a_rc: $fet_a_log; b rc $fet_b_rc: $(cat "$FX/gen.log")"
+fi
+
+# fet2. A Check site run whose commit is missing and cannot be fetched. An older one is skipped and
+# the newer run is cited (102). A newer one stops the generator: it could be the final run, so no
+# doc is written.
+pr_case fet2 other plain
+fet2_h=$(head_sha)
+fet2_g=$(git -C "$CASE" -c user.name=test -c user.email=t@example.invalid commit-tree "$fet2_h^{tree}" -p "$BASE" -m same-content)
+drop_from_clone "$CASE"
+fet2_remote=$tmp/fet2-remote.git
+git init -q --bare "$fet2_remote"
+fx_qodo_clear "$fet2_h"
+fx_runs 101 "$fet2_g" success success 102 "$fet2_h" success success
+gen "$CASE" --fetch "file://$fet2_remote"
+fet2_a_rc=$GEN_RC; fet2_a_ok=no
+if [ "$fet2_a_rc" -eq 0 ] && grep -qF "[run 102]" "$CASE/$doc_name"; then fet2_a_ok=yes; fi
+rm -f "$CASE/$doc_name"
+fx_runs 101 "$fet2_h" success success 102 "$fet2_g" success success
+gen "$CASE" --fetch "file://$fet2_remote"
+if [ "$fet2_a_ok" = yes ] && [ "$GEN_RC" -ne 0 ] && grep -qF 'could not be fetched' "$FX/gen.log" && [ ! -e "$CASE/$doc_name" ]; then
+  report "fet2. an unfetchable run older than the cited one is skipped; a newer one stops the generator" 0
+else
+  report "fet2. an unfetchable run older than the cited one is skipped; a newer one stops the generator" 1 "a rc $fet2_a_rc ok $fet2_a_ok; b rc $GEN_RC: $(cat "$FX/gen.log")"
+fi
+
+# reu. A Check site run created after the PR merged belongs to a later PR on a reused branch, so
+# it is ignored. Run 101 (created before the merge) and run 102 (after it, on the same content)
+# both pass: the doc cites 101. Then run 102 is on a commit the clone lacks and no remote has:
+# it does not stop the generator, and the doc still cites 101.
+pr_case reu other plain
+reu_h=$(head_sha)
+reu_g=$(git -C "$CASE" -c user.name=test -c user.email=t@example.invalid commit-tree "$reu_h^{tree}" -p "$BASE" -m same-content)
+PR_MERGED_AT=2026-11-05T10:30:00Z fx_pr "$reu_h" "$FX/body.md"
+fx_qodo_clear "$reu_h"
+fx_runs 101 "$reu_h" success success 102 "$reu_g" success success
+gen "$CASE"
+reu_a_rc=$GEN_RC; reu_a_log=$(cat "$FX/gen.log"); reu_a_ok=no
+if [ "$reu_a_rc" -eq 0 ] && grep -qF "[run 101]" "$CASE/$doc_name" && ! grep -qF "[run 102]" "$CASE/$doc_name"; then
+  reu_a_ok=yes
+fi
+rm -f "$CASE/$doc_name"
+drop_from_clone "$CASE"
+fx_runs 101 "$reu_h" success success 102 "$reu_g" success success
+gen "$CASE" --fetch "file://$tmp/reu-missing.git"
+reu_b_rc=$GEN_RC; reu_b_ok=no
+if [ "$reu_b_rc" -eq 0 ] && grep -qF "[run 101]" "$CASE/$doc_name" && ! grep -qF "[run 102]" "$CASE/$doc_name"; then
+  reu_b_ok=yes
+fi
+if [ "$reu_a_ok" = yes ] && [ "$reu_b_ok" = yes ]; then
+  report "reu. a run created after the merge is not cited, and an unfetchable one does not stop the generator" 0
+else
+  report "reu. a run created after the merge is not cited, and an unfetchable one does not stop the generator" 1 "a rc $reu_a_rc: $reu_a_log; b rc $reu_b_rc: $(cat "$FX/gen.log")"
+fi
+
+# mrg. A PR whose mergedAt is missing (null) is refused: the generator cannot tell which runs
+# came before the merge. No doc is written.
+pr_case mrg other plain
+PR_MERGED_AT='' fx_pr "$(head_sha)" "$FX/body.md"
+gen "$CASE"
+if [ "$GEN_RC" -ne 0 ] && grep -qF 'no usable mergedAt' "$FX/gen.log" && [ ! -e "$CASE/$doc_name" ]; then
+  report "mrg. a PR with no mergedAt is refused" 0
+else
+  report "mrg. a PR with no mergedAt is refused" 1 "rc $GEN_RC: $(cat "$FX/gen.log")"
+fi
+
+# opn. A PR that has not merged is refused: its doc is generated after the merge, and no doc
+# is written.
+pr_case opn other plain
+PR_STATE=OPEN fx_pr "$(head_sha)" "$FX/body.md"
+gen "$CASE"
+if [ "$GEN_RC" -ne 0 ] && grep -qF 'is OPEN, not merged' "$FX/gen.log" && [ ! -e "$CASE/$doc_name" ]; then
+  report "opn. an open PR is refused and no doc is written" 0
+else
+  report "opn. an open PR is refused and no doc is written" 1 "rc $GEN_RC: $(cat "$FX/gen.log")"
 fi
 
 # trl. The "Generated with" trailer is removed wherever it ends the PR description: after
@@ -868,7 +972,8 @@ else
 fi
 
 # qo1. Qodo's latest review of the head lists one finding: the doc records 1, the generator
-# says so, and the check fails with ::error (AGENTS.md rule 9).
+# says so, and the docs check passes with a ::warning: qodo-open is evidence of Qodo's final
+# review, and the qodo-findings status was the merge gate (AGENTS.md rule 9).
 pr_case qo1 home plain
 h1=$(head_sha)
 review_body "$h1" medium 'u-open-1|Doc omits the Qodo state|📘 Rule violation' > "$FX/review-open.md"
@@ -880,11 +985,12 @@ if [ "$GEN_RC" -ne 0 ] || ! grep -qF 'qodo-open=1 -->' "$CASE/$doc_name" \
   qo1_gen="$(cat "$FX/gen.log")"
 fi
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
-if [ "$qo1_gen" = ok ] && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'open finding' "$FX/check.log"; then
-  report "qo1. one open Qodo finding: the doc records 1 and check fails with ::error" 0
+check "$CASE" "" 1
+if [ "$qo1_gen" = ok ] && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'open finding' "$FX/check.log" \
+  && ! grep -q '::error' "$FX/check.log"; then
+  report "qo1. one open Qodo finding: the doc records 1 and check passes with a ::warning" 0
 else
-  report "qo1. one open Qodo finding: the doc records 1 and check fails with ::error" 1 "gen: $qo1_gen; rc $CHECK_RC: $(cat "$FX/check.log")"
+  report "qo1. one open Qodo finding: the doc records 1 and check passes with a ::warning" 1 "gen: $qo1_gen; rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qo0. An earlier Qodo body had a finding that the latest review no longer lists, and the
@@ -896,7 +1002,7 @@ review_clear "$h1" > "$FX/review-clear.md"
 fx_qodo "$FX/review-clear.md" 2026-11-05T15:59:06Z "$FX/review-old.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=0 -->' "$CASE/$doc_name" \
   && grep -qF "Open findings in Qodo's latest review: 0." "$CASE/$doc_name" \
   && grep -qF 'No longer listed by Qodo.' "$CASE/$doc_name" \
@@ -913,7 +1019,7 @@ review_great "$(head_sha)" > "$FX/review-great.md"
 fx_qodo "$FX/review-great.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=0 -->' "$CASE/$doc_name" \
   && grep -qF "Qodo's latest review lists no findings." "$CASE/$doc_name" \
   && [ "$CHECK_RC" -eq 0 ]; then
@@ -924,21 +1030,21 @@ fi
 
 # qou. Qodo's latest review of the head lists no findings, in a layout the generator does not know
 # and with no clear phrase: the doc records unknown and says the review could not be read, and the
-# check fails with ::error (AGENTS.md rule 9). No finding is counted as zero here.
+# docs check passes with a ::warning (AGENTS.md rule 9). No finding is counted as zero here.
 pr_case qou other plain
 h1=$(head_sha)
 printf '<h3>Code Review by Qodo</h3>\n\n<p>Qodo finished a pass on this change.</p>\n\n<!-- qodo-self-review-slot -->\n<!-- https://github.com/lioramilbaum/lioramilbaum.github.io/commit/%s -->\n' "$h1" > "$FX/review-unknown.md"
 fx_qodo "$FX/review-unknown.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
   && grep -qF "could not be read: it has no finding the generator can parse" "$CASE/$doc_name" \
   && ! grep -qF "lists no findings." "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'could not be read' "$FX/check.log"; then
-  report "qou. a clear-less review with no known finding layout: the doc records unknown and check fails" 0
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'could not be read' "$FX/check.log"; then
+  report "qou. a clear-less review with no known finding layout: the doc records unknown and check warns" 0
 else
-  report "qou. a clear-less review with no known finding layout: the doc records unknown and check fails" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+  report "qou. a clear-less review with no known finding layout: the doc records unknown and check warns" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qoh. The High group holds a finding block that no parse reads and has no clear line, while the
@@ -949,10 +1055,10 @@ review_groups "$h1" finding nice nice > "$FX/review-high.md"
 fx_qodo "$FX/review-high.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
   && grep -qF "could not be read: it has no finding the generator can parse" "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log"; then
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log"; then
   report "qoh. a High group with an unparsed finding and no clear line, the others Nice: the doc records unknown" 0
 else
   report "qoh. a High group with an unparsed finding and no clear line, the others Nice: the doc records unknown" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
@@ -966,10 +1072,10 @@ h1=$(head_sha)
 fx_qodo "$FX/review-great-view.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
   && ! grep -qF "lists no findings." "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log"; then
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log"; then
   report "qog. a Great review with a stray View header: the doc records unknown, not 0" 0
 else
   report "qog. a Great review with a stray View header: the doc records unknown, not 0" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
@@ -983,9 +1089,9 @@ review_groups "$h1" nice nice open > "$FX/review-open-low.md"
 fx_qodo "$FX/review-open-low.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log"; then
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log"; then
   report "qoe. the last group has no clear line at the end of the review: the doc records unknown" 0
 else
   report "qoe. the last group has no clear line at the end of the review: the doc records unknown" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
@@ -1001,34 +1107,34 @@ review_groups "$h1" finding nice nice > "$FX/review-new.md"
 fx_qodo "$FX/review-new.md" 2026-11-05T15:59:06Z "$FX/review-old.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
   && grep -qF 'No longer listed by Qodo.' "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log"; then
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log"; then
   report "qof. an earlier finding gone, the latest review unreadable: the doc records unknown, not 0" 0
 else
   report "qof. an earlier finding gone, the latest review unreadable: the doc records unknown, not 0" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qox. Qodo's latest review names the base commit, not the head's content: the doc records
-# other, and the check fails with ::error.
+# other, and the check passes with a ::warning.
 pr_case qox other plain
 review_clear "$BASE" > "$FX/review-base.md"
 fx_qodo "$FX/review-base.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=other -->' "$CASE/$doc_name" \
   && grep -qF "its findings are not cleared" "$CASE/$doc_name" && ! grep -qF "lists no findings" "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'other content' "$FX/check.log"; then
-  report "qox. a review of other content: the doc records other and check fails" 0
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'other content' "$FX/check.log"; then
+  report "qox. a review of other content: the doc records other and check warns" 0
 else
-  report "qox. a review of other content: the doc records other and check fails" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+  report "qox. a review of other content: the doc records other and check warns" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qol. Two Qodo versions: an earlier one names a commit with the head's content, and the
 # latest names the base commit. The latest is the one that counts, so the doc records other
-# and the check fails.
+# and the check warns.
 pr_case qol other plain
 h1=$(head_sha)
 review_clear "$h1" > "$FX/review-head.md"
@@ -1036,13 +1142,13 @@ review_clear "$BASE" > "$FX/review-base.md"
 fx_qodo "$FX/review-base.md" 2026-11-05T15:59:06Z "$FX/review-head.md"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=other -->' "$CASE/$doc_name" \
   && grep -qF "its findings are not cleared" "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'other content' "$FX/check.log"; then
-  report "qol. the latest of two Qodo versions is of other content: the doc records other and check fails" 0
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'other content' "$FX/check.log"; then
+  report "qol. the latest of two Qodo versions is of other content: the doc records other and check warns" 0
 else
-  report "qol. the latest of two Qodo versions is of other content: the doc records other and check fails" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+  report "qol. the latest of two Qodo versions is of other content: the doc records other and check warns" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qop. Qodo's latest review names the base commit and lists a finding: the finding is not
@@ -1058,16 +1164,16 @@ else
   report "qop. a finding in a review of other content is not cleared: the doc records other" 1 "$(cat "$FX/gen.log")"
 fi
 
-# qon. No Qodo comment at all: the doc records none and the check fails.
+# qon. No Qodo comment at all: the doc records none and the check warns.
 pr_case qon other plain
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)" "" 1
+check "$CASE" "" 1
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=none -->' "$CASE/$doc_name" \
-  && [ "$CHECK_RC" -ne 0 ] && grep -q '::error' "$FX/check.log" && grep -q 'had not reviewed' "$FX/check.log"; then
-  report "qon. no Qodo review: the doc records none and check fails" 0
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'had not reviewed' "$FX/check.log"; then
+  report "qon. no Qodo review: the doc records none and check warns" 0
 else
-  report "qon. no Qodo review: the doc records none and check fails" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+  report "qon. no Qodo review: the doc records none and check warns" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qom. A doc from before the Qodo state was recorded (no qodo-open= field), with the right
@@ -1078,7 +1184,7 @@ gen "$CASE"
 sed -E 's/ qodo-open=[a-z0-9]+ -->$/ -->/' "$CASE/$doc_name" > "$FX/qom.md"
 cp "$FX/qom.md" "$CASE/$doc_name"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$GEN_RC" -eq 0 ] && ! grep -qF 'qodo-open=' "$CASE/$doc_name" \
   && [ "$CHECK_RC" -ne 0 ] && grep -q 'no Qodo state' "$FX/check.log"; then
   report "qom. a doc with no Qodo state in its metadata fails the check" 0
@@ -1095,7 +1201,7 @@ gen "$CASE"
 grep '^<!-- delivery: ' "$CASE/$doc_name" | sed -E 's/ qodo-open=[a-z0-9]+ -->$/ -->/' > "$FX/qod-legacy.txt"
 cat "$FX/qod-legacy.txt" >> "$CASE/$doc_name"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=0 -->' "$CASE/$doc_name" \
   && [ "$CHECK_RC" -ne 0 ] && grep -q 'no Qodo state' "$FX/check.log"; then
   report "qod. the last metadata line has no Qodo state, though an earlier line has qodo-open=0: check fails" 0
@@ -1103,8 +1209,8 @@ else
   report "qod. the last metadata line has no Qodo state, though an earlier line has qodo-open=0: check fails" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
-# own. Only the PR's own doc is read: a stale sibling doc and a merged doc with no
-# metadata, both in the tree when the doc is generated, leave the check green.
+# own. Only the docs the PR adds are read: a stale sibling doc and a merged doc with no
+# metadata, both already on the base, leave the check green.
 new_case own
 printf 'old\n' > "$CASE/deliveries/2026-10-01-old.md"
 printf 'stale\n<!-- delivery: content=%040d homepage=%040d -->\n' 0 0 > "$CASE/deliveries/2026-10-02-stale.md"
@@ -1116,40 +1222,116 @@ fx_runs 101 "$(head_sha)" success success
 fx_qodo_clear "$(head_sha)"
 gen "$CASE"
 commit_all "delivery doc"
-check "$CASE" "$(head_sha)"
-if [ "$GEN_RC" -eq 0 ] && [ "$CHECK_RC" -eq 0 ]; then
-  report "own. only the PR's own doc is read: sibling docs do not fail the check" 0
+check "$CASE"
+if [ "$GEN_RC" -eq 0 ] && [ "$CHECK_RC" -eq 0 ] && grep -qF 'docs PR: 1 delivery doc(s) checked' "$FX/check.log"; then
+  report "own. only the docs the PR adds are read: sibling docs do not fail the check" 0
 else
-  report "own. only the PR's own doc is read: sibling docs do not fail the check" 1 "$(cat "$FX/gen.log") $(cat "$FX/check.log")"
+  report "own. only the docs the PR adds are read: sibling docs do not fail the check" 1 "$(cat "$FX/gen.log") $(cat "$FX/check.log")"
 fi
 
-# missing. No doc: the check warns and passes (GITHUB_ACTIONS annotates the warning).
-pr_case missing other plain
-commit_all "a commit with no doc"
-check "$CASE" "$(head_sha)" "" 1
-if [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log"; then
-  report "missing. no doc: a ::warning and a pass" 0
+# code. A PR that changes code carries no doc: the check passes with neither a warning nor an
+# error, and says the doc comes after the merge. A stale doc it also carries is not read.
+pr_case code other plain
+check "$CASE" "" 1
+code_plain=$CHECK_RC:$(cat "$FX/check.log")
+printf 'stale\n<!-- delivery: content=%040d head=%040d homepage=%040d qodo-open=0 -->\n' 0 0 0 > "$CASE/$doc_name"
+printf 'more\n' >> "$CASE/notes.txt"
+commit_all "a code change that also carries a stale doc"
+check "$CASE" "" 1
+if [ "${code_plain%%:*}" -eq 0 ] && [ "$CHECK_RC" -eq 0 ] && grep -qF 'after it merges' "$FX/check.log" \
+  && ! grep -qE '::(warning|error)' "$FX/check.log" && ! grep -q '::' <<< "$code_plain"; then
+  report "code. a code PR needs no delivery doc: the check passes without a warning" 0
 else
-  report "missing. no doc: a ::warning and a pass" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+  report "code. a code PR needs no delivery doc: the check passes without a warning" 1 "first: $code_plain; then rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
-# meta, unk. A doc without metadata, and a HEAD_SHA that is not in the clone, both fail.
+# shot. A docs PR that changes only a screenshot and TEMPLATE.md has no doc to check: it passes.
+pr_case shot other plain
+mkdir -p "$CASE/deliveries/$stem"
+printf 'png' > "$CASE/deliveries/$stem/desktop.png"
+printf '\n' >> "$CASE/deliveries/TEMPLATE.md"
+commit_all "a screenshot and a template change"
+check "$CASE"
+if [ "$CHECK_RC" -eq 0 ] && grep -qF 'docs PR: 0 delivery doc(s) checked' "$FX/check.log"; then
+  report "shot. a docs PR with only a screenshot and TEMPLATE.md passes with no doc read" 0
+else
+  report "shot. a docs PR with only a screenshot and TEMPLATE.md passes with no doc read" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
+# tab. A docs PR whose doc's name has a tab is a docs PR, and that doc is read under its own
+# name: with no metadata, it fails. (Git quotes such a name unless the list is -z, and a
+# quoted name is outside deliveries/, so the PR passed as a code PR.)
+pr_case tab other plain
+tab_doc=$'deliveries/2026-11-05-a\tb.md'
+printf 'no metadata\n' > "$CASE/$tab_doc"
+commit_all "a doc whose name has a tab"
+check "$CASE"
+if [ "$CHECK_RC" -ne 0 ] && grep -q 'no delivery metadata' "$FX/check.log" && grep -qF "$tab_doc" "$FX/check.log"; then
+  report "tab. a doc whose name has a tab is read under its own name: no metadata fails" 0
+else
+  report "tab. a doc whose name has a tab is read under its own name: no metadata fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
+# meta, nohd, unk. A doc without metadata fails; so does one whose metadata names no merged
+# head (the format from before docs moved to their own PR); and so does a base that is not in
+# the clone.
 stale_case meta
 gen "$CASE"
 grep -v '^<!-- delivery: ' "$CASE/$doc_name" > "$FX/nometa.md"
 cp "$FX/nometa.md" "$CASE/$doc_name"
 commit_all "a doc without metadata"
-check "$CASE" "$(head_sha)"
+check "$CASE"
 if [ "$CHECK_RC" -ne 0 ] && grep -q 'no delivery metadata' "$FX/check.log"; then
   report "meta. a doc without metadata fails" 0
 else
   report "meta. a doc without metadata fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
-check "$CASE" "1111111111111111111111111111111111111111"
-if [ "$CHECK_RC" -ne 0 ] && grep -q 'not a commit' "$FX/check.log"; then
-  report "unk. an unknown HEAD_SHA fails" 0
+gen "$CASE"
+sed -E 's/ head=[0-9a-f]{40} / /' "$CASE/$doc_name" > "$FX/nohead.md"
+cp "$FX/nohead.md" "$CASE/$doc_name"
+commit_all "a doc in the old metadata format"
+check "$CASE"
+if [ "$CHECK_RC" -ne 0 ] && grep -q 'no merged head' "$FX/check.log"; then
+  report "nohd. a doc whose metadata names no merged head fails" 0
 else
-  report "unk. an unknown HEAD_SHA fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+  report "nohd. a doc whose metadata names no merged head fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+fi
+CHECK_BASE=1111111111111111111111111111111111111111 check "$CASE"
+if [ "$CHECK_RC" -ne 0 ] && grep -q 'not a commit' "$FX/check.log"; then
+  report "unk. an unknown base fails" 0
+else
+  report "unk. an unknown base fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
+# ftch. CI's clone is shallow, so the merged head is not in it. The check fetches it from
+# origin and passes. A head that origin does not have fails.
+pr_case ftch other plain
+fx_qodo_clear "$(head_sha)"
+gen "$CASE"
+mv "$CASE/$doc_name" "$FX/ftch-doc.md" 2>/dev/null || true
+printf 'later\n' > "$CASE/later.txt"
+commit_all "main moves on after the merge, and the docs branch starts from it"
+mv "$FX/ftch-doc.md" "$CASE/$doc_name" 2>/dev/null || true
+commit_all "delivery doc"
+ftch_head=$(git -C "$CASE" rev-parse HEAD~2)
+shallow="$tmp/ftch-shallow"
+git -C "$CASE" config uploadpack.allowAnySHA1InWant true
+git clone -q --depth=2 "file://$CASE" "$shallow" >/dev/null 2>&1 || mkdir -p "$shallow"
+ftch_absent=0
+git -C "$shallow" cat-file -e "$ftch_head^{commit}" 2>/dev/null || ftch_absent=1
+check "$shallow"
+ftch_rc=$CHECK_RC; ftch_log=$(cat "$FX/check.log")
+{ sed -E 's/ head=[0-9a-f]{40} / head=2222222222222222222222222222222222222222 /' "$shallow/$doc_name" > "$FX/ftch-bad.md" \
+  && cp "$FX/ftch-bad.md" "$shallow/$doc_name" \
+  && git -C "$shallow" add -A \
+  && git -C "$shallow" -c user.name=test -c user.email=t@example.invalid commit -q -m "a doc naming a head origin lacks"
+} >/dev/null 2>&1 || true
+check "$shallow"
+if [ "$ftch_absent" -eq 1 ] && [ "$ftch_rc" -eq 0 ] && grep -qF "merged head $ftch_head" <<< "$ftch_log" \
+  && [ "$CHECK_RC" -ne 0 ] && grep -q 'could not be fetched' "$FX/check.log"; then
+  report "ftch. a merged head missing from a shallow clone is fetched; one origin lacks fails" 0
+else
+  report "ftch. a merged head missing from a shallow clone is fetched; one origin lacks fails" 1 "absent $ftch_absent; rc $ftch_rc: $ftch_log; then rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # hk. An empty "## Hackathon" heading (the PR template ships one) is treated as absent: no
@@ -1173,12 +1355,28 @@ else
   report "hk. an empty Hackathon heading is absent; a non-empty one without a link fails" 1 "empty: $hk_empty; gen rc $GEN_RC: $(cat "$FX/gen.log")"
 fi
 
+# doc_body NAME: the body of the doc's "## NAME" section, without the author label and blank lines.
+doc_body() {
+  # shellcheck disable=SC2016 # awk program, not the shell
+  "$awk_bin" -v h="## $1" '$0 == h { on = 1; next } /^## / { on = 0 } on' "$CASE/$doc_name" 2>/dev/null \
+    | sed '/^_From the PR description (author-written)\._$/d; /^[[:space:]]*$/d'
+}
+
 # ac. The real PR template has "Closes #" and "## Acceptance criteria" before "## Why"
-# (AGENTS.md rule 10). Guards: section() takes the Why section by its exact heading only. The
+# (AGENTS.md rule 10). Guards: section() takes each section by its exact heading only. The
 # criteria carry lines a loose match would take for Why ("## Why (from the issue)", "### Why",
-# "##Why", an indented "## Why"), each followed by AC-MARKER-WHY. The filled template must
-# generate, the doc's Why body must be exactly "Filled Why.", and no AC-MARKER text (AC-MARKER-WHY
-# included) may appear anywhere in the doc. The criteria are not copied.
+# "##Why", an indented "## Why"), each followed by AC-MARKER-WHY. They also carry fenced examples
+# with exact headings: "## How" in a ```markdown fence, "## Why" in a ~~~ fence, and "## What" in a
+# four-backtick fence that holds an inner ``` line. Each is followed by its AC-MARKER. A fenced
+# "## LIM-FENCED-KEPT" line inside Limitations stays in that section's body. The filled template
+# must generate, the doc's Why, How and What bodies must be exactly "Filled ...", and no AC-MARKER
+# text may appear anywhere in the doc. The criteria are not copied.
+# Two fence traps close the criteria, after the fences above have closed, so each opens a fence
+# only if its guard is gone: "    ```" (4 spaces: an indented code line, not a fence) and
+# "```not`a`fence" (a backtick info string: not a fence). Each is followed by "## Notes" (not a
+# copied heading, so it stays harmless while the guard holds) and its own marker. Nothing closes
+# either fence before the real Why, How and What sections. If a guard is removed, the fence
+# swallows them and the case fails.
 tpl=$root/.github/pull_request_template.md
 pr_case ac other plain
 # shellcheck disable=SC2016 # awk program, not the shell
@@ -1192,21 +1390,28 @@ pr_case ac other plain
     print "##Why"; print "AC-MARKER-WHY"
     print "## Why (from the issue)"; print "AC-MARKER-WHY"
     print "    ## Why"; print "AC-MARKER-WHY"
+    print "```markdown"; print "## How"; print "AC-MARKER-HOW"; print "```"
+    print "~~~"; print "## Why"; print "AC-MARKER-WHY"; print "~~~"
+    print "````"; print "```"; print "## What"; print "AC-MARKER-WHAT"; print "```"; print "````"
+    print "    ```"; print "## Notes"; print "AC-MARKER-INDENT"
+    print "```not`a`fence"; print "## Notes"; print "AC-MARKER-INFO"
   }
   /^## (Why|How|What|Assistance and third-party material|Limitations)$/ { print ""; print "Filled " substr($0, 4) "." }
+  /^## Limitations$/ { print "```"; print "## LIM-FENCED-KEPT"; print "```" }
 ' "$tpl" > "$FX/body.md"
 fx_pr "$(head_sha)" "$FX/body.md"
 gen "$CASE"
 ac_order=$(grep -E '^## (Acceptance criteria|Why)$' "$tpl" | tr '\n' '|')
-# shellcheck disable=SC2016 # awk program, not the shell
-why_body=$("$awk_bin" '/^## Why$/ { on = 1; next } /^## / { on = 0 } on' "$CASE/$doc_name" 2>/dev/null \
-  | sed '/^_From the PR description (author-written)\._$/d; /^[[:space:]]*$/d')
+why_body=$(doc_body Why || true)
+how_body=$(doc_body How || true)
+what_body=$(doc_body What || true)
 if [ "$ac_order" = "## Acceptance criteria|## Why|" ] && grep -q '^Closes #' "$tpl" \
-  && [ "$GEN_RC" -eq 0 ] && [ "$why_body" = "Filled Why." ] \
+  && [ "$GEN_RC" -eq 0 ] && [ "$why_body" = "Filled Why." ] && [ "$how_body" = "Filled How." ] \
+  && [ "$what_body" = "Filled What." ] && grep -qxF '## LIM-FENCED-KEPT' "$CASE/$doc_name" \
   && ! grep -qF 'AC-MARKER' "$CASE/$doc_name"; then
   report "ac. the PR template's Acceptance criteria parse cleanly and stay out of the doc" 0
 else
-  report "ac. the PR template's Acceptance criteria parse cleanly and stay out of the doc" 1 "order '$ac_order'; gen rc $GEN_RC; Why body '$why_body': $(cat "$FX/gen.log")"
+  report "ac. the PR template's Acceptance criteria parse cleanly and stay out of the doc" 1 "order '$ac_order'; gen rc $GEN_RC; Why '$why_body' How '$how_body' What '$what_body': $(cat "$FX/gen.log")"
 fi
 
 # au. Only the Qodo bot's comments count: a newer comment by a person that quotes the
@@ -1236,7 +1441,7 @@ fi
 # the recorded homepage: regenerating an unchanged homepage needs no new screenshot.
 pr_case om home full
 gen "$CASE"
-read -r om_d om_h <<< "$(sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) homepage=([0-9a-f]{40})( qodo-open=[a-z0-9]+)? -->$/\1 \2/p' "$CASE/$doc_name")"
+read -r om_d om_h <<< "$(sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) head=[0-9a-f]{40} homepage=([0-9a-f]{40})( qodo-open=[a-z0-9]+)? -->$/\1 \2/p' "$CASE/$doc_name")"
 grep -v '^<!-- delivery: ' "$CASE/$doc_name" > "$FX/om.md"
 printf '<!-- delivery: content=%s homepage=%s changed=yes base=%s -->\n' "$om_d" "$om_h" "$BASE" >> "$FX/om.md"
 cp "$FX/om.md" "$CASE/$doc_name"
@@ -1252,14 +1457,13 @@ fi
 # cut. The window is exclusive at 2026-12-12T23:00:00Z: a stale doc passes once it has
 # ended and fails one second before.
 stale_case cut
-h=$(head_sha)
-check "$CASE" "$h" 2026-12-12T23:00:00Z
+check "$CASE" 2026-12-12T23:00:00Z
 if [ "$CHECK_RC" -eq 0 ] && grep -q 'ended' "$FX/check.log"; then
   report "cut. at 23:00:00Z the check passes without reading the doc" 0
 else
   report "cut. at 23:00:00Z the check passes without reading the doc" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
-check "$CASE" "$h" 2026-12-12T22:59:59Z
+check "$CASE" 2026-12-12T22:59:59Z
 if [ "$CHECK_RC" -ne 0 ] && grep -q 'stale' "$FX/check.log"; then
   report "cut. at 22:59:59Z the stale doc fails" 0
 else
@@ -1778,13 +1982,6 @@ if [ "$QSTAT_RC" -eq 2 ] && qstat_is "$qs21_want"; then
 else
   report "qs21. a clock one second before the last change: the age prints 0s, waiting, exit 2" 1 "rc $QSTAT_RC: $(cat "$FX/qs.out") $(cat "$FX/qs.err")"
 fi
-
-# drop_from_clone CASE: expires the reflogs and prunes unreachable objects, so a commit that no
-# branch reaches is gone from the clone (as a commit a PR force-pushed over is).
-drop_from_clone() {
-  git -C "$1" reflog expire --expire=now --all
-  git -C "$1" gc -q --prune=now
-}
 
 # qs22. The number of findings: the distinct keys of the findings the review lists. Three lines
 # with two keys (one listed twice) count 2; a clear "Great" review counts 0; a layout the parser
