@@ -542,7 +542,7 @@ wait_for_ci() {
 # the agent never does.
 ready() {
   stage='done'; where=''
-  pr_gh pr comment "$pr" --repo "$repo" --body "The agent run is done: Qodo's latest review of this head lists no open findings, and CI has passed on it. Ready for the owner to review. The owner runs the delivery-doc skill (AGENTS.md rule 6) and merges; the agent does neither." >/dev/null \
+  pr_gh pr comment "$pr" --repo "$repo" --body "The agent run is done: Qodo's latest review of this head lists no open findings, and CI has passed on it. Ready for the owner to review. The owner merges, then runs the delivery-doc skill on the merged PR (AGENTS.md rule 6); the agent does neither." >/dev/null \
     || echo "warning: could not comment on PR $pr" >&2
   pr_gh issue comment "$issue" --repo "$repo" --body "PR #$pr is ready for the owner: Qodo's latest review lists no open findings, and CI has passed." >/dev/null \
     || echo "warning: could not comment on issue #$issue" >&2

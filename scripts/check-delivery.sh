@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# AGENTS.md rule 6: checks the PR's own delivery doc against the PR head. It asks
-# three questions. Does the doc exist? If not, CI warns and passes. Was the doc
-# generated for this head's content digest (the tree without the doc and its
-# screenshots)? If not, it fails. Did Qodo's latest review of that content list no
-# open findings (qodo-open=0, AGENTS.md rule 9)? If not, it fails. Once the delivery
-# window has ended, the check passes without reading the doc. Renovate PRs are
-# skipped in the workflow.
+# AGENTS.md rule 6: a PR's delivery doc is generated after the PR merges and added in a
+# docs PR, one that changes only files under deliveries/. A PR that changes anything
+# else needs no doc, and the check passes. On a docs PR it checks each doc the PR adds
+# or changes. Does its metadata name the merged head (head=)? Was it generated for that
+# head's content digest? If not, it fails. Qodo's final review is evidence (qodo-open,
+# AGENTS.md rule 9), not a gate: a value other than 0 warns. Once the delivery window
+# has ended, the check passes without reading a doc. Renovate PRs are skipped in the
+# workflow.
 #
-# Usage: scripts/check-delivery.sh                 (CI: the PR's doc, from the environment)
+# Usage: scripts/check-delivery.sh                 (CI: the PR's docs, from the checkout)
 #        scripts/check-delivery.sh --digest COMMIT DOC
 #        scripts/check-delivery.sh --window        (exit 0 open, 3 ended)
-# Environment: HEAD_SHA, PR_CREATED_AT and HEAD_REF name the doc, as in
-# generate-delivery.sh. NOW overrides the clock (tests use it). AWK selects awk.
+# Environment: the checked-out HEAD is the PR (in CI, its merge commit) and BASE_SHA its
+# base (default HEAD^1, the merge commit's base parent). A merged head missing from a
+# shallow clone is fetched from origin. NOW overrides the clock (tests use it). AWK
+# selects awk.
 set -euo pipefail
 LC_ALL=C
 
@@ -65,44 +68,76 @@ if ! window_open; then
   exit 0
 fi
 
-: "${HEAD_SHA:?set HEAD_SHA to the PR head commit}"
-: "${PR_CREATED_AT:?set PR_CREATED_AT to the PR open time}"
-: "${HEAD_REF:?set HEAD_REF to the PR head branch}"
-[[ "$PR_CREATED_AT" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T ]] \
-  || fail deliveries/ "PR_CREATED_AT is not an ISO time: $PR_CREATED_AT"
-date=${BASH_REMATCH[1]}
-case "$HEAD_REF" in
-  */*) slug=${HEAD_REF#*/} ;;
-  *) slug=$HEAD_REF ;;
-esac
-doc="deliveries/$date-$slug.md"
+base=${BASE_SHA:-HEAD^1}
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null \
+  || fail deliveries/ "the base $base is not a commit in this clone"
 
-git rev-parse --verify --quiet "$HEAD_SHA^{commit}" >/dev/null \
-  || fail "$doc" "HEAD_SHA $HEAD_SHA is not a commit in this clone"
+# The PR's changes: HEAD against its base. A docs PR changes only files under deliveries/.
+# Its docs are deliveries/<name>.md, not TEMPLATE.md and not a file in a screenshot directory.
+# The list is NUL-delimited (-z), so git does not quote a name with a tab, a newline or a
+# quote, and such a doc is read under its own name.
+changed=$(mktemp)
+trap 'rm -f "$changed"' EXIT
+git diff --name-only -z --no-renames "$base" HEAD > "$changed" \
+  || fail deliveries/ "could not list the changes from $base to HEAD"
+code=0; docs=()
+while IFS= read -r -d '' path; do
+  [[ -n "$path" ]] || continue
+  case "$path" in
+    deliveries/TEMPLATE.md | deliveries/*/*) ;;
+    deliveries/*.md) docs+=("$path") ;;
+    deliveries/*) ;;
+    *) code=1 ;;
+  esac
+done < "$changed"
 
-if ! git cat-file -e "$HEAD_SHA:$doc" 2>/dev/null; then
-  say warning "$doc" "no delivery doc at $doc in $HEAD_SHA; the delivery-doc skill writes it (AGENTS.md rule 6)"
+if (( code )); then
+  echo "notice: this PR changes files outside deliveries/, so it carries no delivery doc; its doc comes in a docs PR after it merges (AGENTS.md rule 6)"
   exit 0
 fi
 
-# The metadata is the doc's last "<!-- delivery:" line. Its digest and qodo-open come from
-# that one line, so an earlier line cannot supply a value the last line lacks.
-meta=$(git show "$HEAD_SHA:$doc" | tr -d '\r' | grep '^<!-- delivery: ' | tail -n1 || true)
-recorded=$(printf '%s\n' "$meta" | sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) .*-->$/\1/p')
-[[ -n "$recorded" ]] || fail "$doc" "no delivery metadata comment; run scripts/generate-delivery.sh (AGENTS.md rule 6)"
+# check_doc DOC: DOC (in HEAD) records the merged head it was generated from, and that
+# head's content digest.
+check_doc() {
+  local doc=$1 meta recorded head want qodo
+  # The metadata is the doc's last "<!-- delivery:" line. Its values come from that one
+  # line, so an earlier line cannot supply a value the last line lacks.
+  meta=$(git show "HEAD:$doc" | tr -d '\r' | grep '^<!-- delivery: ' | tail -n1 || true)
+  recorded=$(printf '%s\n' "$meta" | sed -nE 's/^<!-- delivery: content=([0-9a-f]{40}) .*-->$/\1/p')
+  [[ -n "$recorded" ]] || fail "$doc" "no delivery metadata comment; run scripts/generate-delivery.sh (AGENTS.md rule 6)"
+  head=$(printf '%s\n' "$meta" | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} head=([0-9a-f]{40}) .*-->$/\1/p')
+  [[ -n "$head" ]] || fail "$doc" "the doc records no merged head (head=); regenerate it from the merged PR (AGENTS.md rule 6)"
 
-want=$(digest "$HEAD_SHA" "$doc")
-[[ "$recorded" == "$want" ]] \
-  || fail "$doc" "stale: the doc was generated for content $recorded but $HEAD_SHA has content $want; run scripts/generate-delivery.sh and amend the doc"
+  # CI's clone is shallow, so the merged head is usually fetched.
+  if ! git cat-file -e "$head^{commit}" 2>/dev/null; then
+    git fetch --quiet --no-tags --depth=1 origin "$head" >/dev/null 2>&1 || true
+  fi
+  git cat-file -e "$head^{commit}" 2>/dev/null \
+    || fail "$doc" "the merged head $head is not in this clone and could not be fetched from origin"
 
-qodo=$(printf '%s\n' "$meta" \
-  | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} .* qodo-open=(none|other|unknown|[0-9]+) -->$/\1/p')
-case "$qodo" in
-  0) ;;
-  "") fail "$doc" "the doc records no Qodo state; regenerate it (AGENTS.md rule 9)" ;;
-  none) fail "$doc" "Qodo had not reviewed this PR when the doc was generated; mark it ready, wait for Qodo's review and regenerate (AGENTS.md rule 9)" ;;
-  other) fail "$doc" "Qodo's latest review was of other content when the doc was generated; wait for Qodo to review the head and regenerate (AGENTS.md rule 9)" ;;
-  unknown) fail "$doc" "Qodo's latest review could not be read when the doc was generated: it has no finding the generator can parse, and not every group says it is clear; a new layout belongs in scripts/qodo-review.awk (AGENTS.md rule 9)" ;;
-  *) fail "$doc" "Qodo's latest review listed $qodo open finding(s) when the doc was generated; fix or dismiss them and regenerate (AGENTS.md rule 9)" ;;
-esac
-echo "$doc: ok (content $want, no open Qodo findings)"
+  want=$(digest "$head" "$doc")
+  [[ "$recorded" == "$want" ]] \
+    || fail "$doc" "stale: the doc was generated for content $recorded but its merged head $head has content $want; regenerate it from the merged PR"
+
+  # Qodo's final review is recorded, not gated: the qodo-findings status gated the merge (rule 9).
+  qodo=$(printf '%s\n' "$meta" \
+    | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} .* qodo-open=(none|other|unknown|[0-9]+) -->$/\1/p')
+  case "$qodo" in
+    0) echo "$doc: ok (content $want, merged head $head, no open Qodo findings)"; return 0 ;;
+    "") fail "$doc" "the doc records no Qodo state; regenerate it (AGENTS.md rule 9)" ;;
+    none) say warning "$doc" "Qodo had not reviewed the PR when the doc was generated (AGENTS.md rule 9)" ;;
+    other) say warning "$doc" "Qodo's final review was of other content than the merged head (AGENTS.md rule 9)" ;;
+    unknown) say warning "$doc" "Qodo's final review could not be read: it has no finding the generator can parse, and not every group says it is clear; a new layout belongs in scripts/qodo-review.awk (AGENTS.md rule 9)" ;;
+    *) say warning "$doc" "Qodo's final review listed $qodo open finding(s) (AGENTS.md rule 9)" ;;
+  esac
+  echo "$doc: ok (content $want, merged head $head, qodo-open $qodo)"
+}
+
+ndocs=0
+for doc in ${docs[@]+"${docs[@]}"}; do
+  # A doc the PR deletes is not in HEAD, so there is nothing to check.
+  git cat-file -e "HEAD:$doc" 2>/dev/null || continue
+  check_doc "$doc"
+  ndocs=$((ndocs + 1))
+done
+echo "docs PR: $ndocs delivery doc(s) checked"
