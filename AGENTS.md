@@ -218,6 +218,19 @@ The `qodo-findings` status is the merge gate. The delivery doc is generated afte
 
 *Why:* The Qodo Software Factory hackathon's Day 3 challenge asks every PR description to carry the ticket link and its acceptance criteria. PRs #25 (issue #24) and #34 (issue #27) linked their issues but not the criteria; Qodo found its requirement gaps only by reading the linked issues.
 
+### 11. A check that cannot read its input fails; it never passes
+
+**Where:** code that decides whether a change passes, fails or is ready, or that records evidence: `scripts/check-*.sh`, `scripts/qodo-status.sh`, `scripts/qodo-gate.sh`, `scripts/qodo-review.awk`, `scripts/generate-delivery.sh`, `scripts/snapshot-site.sh`, `scripts/agent-run.sh`, the workflow steps that run them, and the failure cases in `scripts/test-*.sh`. Like rule 8, it applies to the code a PR adds or changes.
+
+- An input the code cannot read is a failure, an error or an explicit `unknown`, never a pass, a zero or a clean result. That covers a file that is missing, a command or API call that fails or times out, a response in a layout the code does not recognise, and a list that comes back empty when it should not (no checks reported on the head, no findings parsed from a review that does not say it is clear).
+- Code that skips a check at run time (nothing it covers changed, or a window has ended) prints that it skipped, and why.
+- An advisory step does not block the merge, but it never passes silently: it fails or warns, naming what it could not read. `scripts/check-links.sh` exits non-zero and names what failed (as a `::warning::` in CI), and CI runs it as a non-blocking step; a delivery doc's `qodo-open` other than 0 is a warning in `scripts/check-delivery.sh`.
+- A test of a failure path checks why the command failed (its message or exit code), not only that it failed, so an unrelated failure, such as a missing tool or a network error, cannot pass it.
+- An exemption these rules name is a decision, not an unread input: Renovate PRs (rules 6 and 9), and a PR that changes files outside `deliveries/` or runs after the delivery window ends (rule 6).
+- Rules 6 and 9 apply this to a head that cannot be fetched, a Qodo layout `scripts/qodo-review.awk` does not know, and a gate that cannot read the PR. This rule is the general case, for code they don't name. Rule 8 requires a test for each new failure path; this rule says what the path does.
+
+*Why:* Qodo raised the same finding, in different code, on five of the six PRs whose review history was mined for the hackathon's Day 5 challenge (#25, #34, #45, #46, #54 and #60): a check that passed because it could not read its input, or skipped without saying so. "Snapshot errors pass the 404 test" (#25), "Broken submission links pass link checks" and "Manual reruns can silently skip the browser check" (#34), "An unread Qodo layout counts as zero open findings" (#46), "Agent-ready PRs can have failing CI" (#54) and "Unusual doc names skip validation" (#60) were each fixed the same way: fail, or report `unknown`. Rules 6 and 9 recorded those fixes case by case. Mining that review history (#53) found the pattern behind them.
+
 ## Workflow
 
 Before starting an issue, read it and confirm it has acceptance criteria (rule 10).

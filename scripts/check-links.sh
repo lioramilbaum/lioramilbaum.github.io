@@ -8,9 +8,13 @@
 # job before the next starts. A job takes at most one link's retry budget (about
 # 66 s), or about 200 s for a discussion comment lookup (up to 3 API pages, each with
 # the same budget). So the worst case is the sum over batches: 66 s for a batch of
-# links only, 200 s for a batch with a comment lookup. This page has 8 links and 2
-# comment lookups, in two batches: 66 s + 200 s = 266 s, inside CI's 5-minute step
-# timeout. Check that sum before adding links or comment lookups.
+# links only, 200 s for a batch with a comment lookup. This page has 11 links and 5
+# comment lookups (16 jobs), in two batches: 8 links, then 3 links and 5 lookups. The
+# worst case is 66 s + 198 s = 264 s (a lookup is 3 pages of 66 s), inside CI's 5-minute
+# step timeout with 36 s to spare. The second batch is full: no job slots are left. A
+# 17th job starts a third batch, which adds at least 66 s and takes the worst case past
+# 300 s, so the time budget must change before another link or comment lookup is added.
+# Check that sum before adding links or comment lookups.
 #
 # Discussion comment links (https://github.com/<o>/<r>/discussions/<n>#discussioncomment-<id>)
 # are also looked up through the REST API: 200 if the discussion has the comment,
@@ -25,7 +29,13 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 page="${1:-$root/_site/docs/qodo-software-factory-hackathon/index.html}"
-test -f "$page" || { echo "error: page not found: $page; run scripts/build-site.sh first" >&2; exit 1; }
+# Page-level failure: a message on stderr, and a ::warning:: under GITHUB_ACTIONS.
+fail() {
+  echo "error: $1" >&2
+  [[ -z "${GITHUB_ACTIONS:-}" ]] || echo "::warning::$1"
+  exit 1
+}
+test -r "$page" || fail "page not found or unreadable: $page; run scripts/build-site.sh first"
 ua='Mozilla/5.0 (compatible; lioramilbaum.com-link-check; +https://github.com/lioramilbaum/lioramilbaum.github.io)'
 
 tmp=$(mktemp -d)
@@ -69,6 +79,7 @@ start() {
   "$@" > "$tmp/$n" &
   if (( n % cap == 0 )); then wait; fi
 }
+[[ -n "$(hrefs)" ]] || fail "link check: no absolute http(s) links on $page"
 while IFS= read -r url; do
   start link "$url"
 done < <(hrefs | sed -E 's/#.*$//' | sort -u)
