@@ -7,6 +7,15 @@ description: "Platform Engineering Architect | DevOps | Efficiency Engineering |
 
 Welcome! This is my home for the topics I'm investing in: platform engineering, DevOps, AI and open source. Find me on the links above.
 
+## News
+
+- Nov 10, 2026 · Advantech
+
+  [Deploying Edge AI Across Heterogeneous Hardware: From Compatibility to Controlled Composition](https://www.advantech.com/hi-in/resources/industry-focus/deploying-edge-ai-across-heterogeneous-hardware-from-compatibility-to-controlled-composition)
+
+  Why edge AI on mixed hardware needs controlled composition, not just compatibility.
+{: .news}
+
 ## Platform Engineering
 
 - [Edge Appliance glossary](docs/edge-appliance/glossary.md)

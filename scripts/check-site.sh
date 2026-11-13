@@ -37,6 +37,30 @@ section "AI" | grep -q 'href="https://github.com/lioramilbaum/projectmesh"' \
 section "AI" | grep -q 'href="/docs/qodo-software-factory-hackathon/"' \
   || fail "Qodo hackathon page link missing from AI"
 
+grep -Eq '<h2[^>]*>News</h2>' "$page" || fail "missing section: ## News"
+# Everything above the Platform Engineering heading must hold the News heading.
+sed '/<h2[^>]*>Platform Engineering<\/h2>/,$d' "$page" | grep -Eq '<h2[^>]*>News</h2>' \
+  || fail "## News must come before ## Platform Engineering"
+
+section "News" | grep -Eq '<ul[^>]* class="news"' \
+  || fail "News list lacks the news class ({: .news})"
+# The date line's colours, light and dark, as the tagline's (the layout's style block).
+styles=$(tr '\n' ' ' < "$page")
+grep -Eq '\.news[^{}]*\{[^}]*color: #666;' <<<"$styles" \
+  || fail "no .news rule with color #666 in the homepage styles" _layouts/home.html
+grep -Eq '@media \(prefers-color-scheme: dark\)[[:space:]]*\{[[:space:]]*\.news[^{}]*\{[^}]*color: #999;' <<<"$styles" \
+  || fail "no dark-mode .news rule with color #999 in the homepage styles" _layouts/home.html
+
+advantech='https://www.advantech.com/hi-in/resources/industry-focus/deploying-edge-ai-across-heterogeneous-hardware-from-compatibility-to-controlled-composition'
+section "News" | grep -Fq "href=\"$advantech\"" \
+  || fail "Advantech article link missing from News"
+section "News" | grep -Fq 'Nov 10, 2026 · Advantech' \
+  || fail "Advantech article's date and publisher line (Nov 10, 2026 · Advantech) missing from News"
+
+entries=$(section "News" | sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' | grep -oE '<li[ >]' | wc -l || true)
+(( entries >= 1 )) || fail "News list has no entries"
+(( entries <= 5 )) || fail "News list has $entries entries; the cap is 5"
+
 if grep -Eq 'href="[^"]*\.md"' "$page"; then
   fail "unrewritten .md link on homepage (jekyll-relative-links)"
 fi

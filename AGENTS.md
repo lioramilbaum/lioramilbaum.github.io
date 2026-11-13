@@ -115,7 +115,7 @@ One term per `##`. Never rename or delete a heading without the owner's explicit
 
 **Where:** `README.md` and `scripts/check-site.sh`
 
-Keep the four `##` topic sections with exactly these names: **Platform Engineering**, **DevOps**, **AI**, **Open Source**. Link internal pages with relative `.md` paths (jekyll-relative-links rewrites them); a raw `.md` href fails CI. Every new homepage link needs a matching assertion in `check-site.sh` in the same PR.
+Keep the four `##` topic sections with exactly these names: **Platform Engineering**, **DevOps**, **AI**, **Open Source**. Above them, as the first section, is `## News`: a list tagged `{: .news}`, newest first, of at most 5 entries (CI fails on a sixth). Each entry is a date and publisher line (`Nov 10, 2026 · Advantech`, or the date alone when there is no external publisher), a blank line, the linked title as its own paragraph, and optionally a blank line and a one-line summary; `_layouts/home.html` styles the first line as the muted date line. Link internal pages with relative `.md` paths (jekyll-relative-links rewrites them); a raw `.md` href fails CI. Every new homepage link needs a matching assertion in `check-site.sh` in the same PR.
 
 *Why:* The homepage structure is asserted on every PR. Changing a section name or adding an unasserted link breaks CI.
 
