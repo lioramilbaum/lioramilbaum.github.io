@@ -157,6 +157,24 @@
       text-decoration: underline;
     }
 
+    /* News entries: a date and publisher line, the linked title, an optional summary. */
+    .news li {
+      margin-bottom: 1.5rem;
+    }
+
+    .news li > p:first-child {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #666;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .news li > p:first-child {
+        color: #999;
+      }
+    }
+
     footer {
       margin-top: 4rem;
       padding-top: 2rem;
