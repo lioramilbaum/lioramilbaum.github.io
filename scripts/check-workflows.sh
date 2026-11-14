@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Parses the workflow files, checks the yearly deploy schedule, and checks who may write
 # statuses or run on pull_request_target (AGENTS.md rule 5): only qodo-findings.yml, whose
-# triggers and permissions are pinned here. agent-run.yml (AGENTS.md Setup) is pinned too: its
-# trigger, guard, permissions and steps. Docker only, no network: the Ruby runs in the
-# jekyll-build-pages image that the build step pulls, so it uses the same YAML library CI
-# does. The image is amd64-only. --user keeps the container from writing as root; the
-# workflows mount is read-only.
+# triggers, permissions and concurrency are pinned here. agent-run.yml (AGENTS.md Setup) is
+# pinned too: its trigger, guard, permissions and steps. Docker only, no network: the Ruby
+# runs in the jekyll-build-pages image that the build step pulls, so it uses the same YAML
+# library CI does. The image is amd64-only. --user keeps the container from writing as root;
+# the workflows and script mounts are read-only.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -73,20 +73,41 @@ files.each do |path|
       report.call(name, "workflow_dispatch has no pr input") unless dispatch["inputs"].is_a?(Hash) && dispatch["inputs"].key?("pr")
     end
     report.call(name, "has a workflow-level env or defaults; the gate sets its env in its one step") if w.key?("env") || w.key?("defaults")
-    conc = w["concurrency"].is_a?(Hash) ? w["concurrency"] : {}
-    report.call(name, "concurrency.cancel-in-progress is not true") unless conc["cancel-in-progress"] == true
-    group = conc["group"].to_s
-    report.call(name, "concurrency.group does not name the issue, pull request and dispatch PR numbers") unless ["github.event.issue.number", "github.event.pull_request.number", "inputs.pr"].all? { |e| group.include?(e) }
+    # The queue sits on the job, not the workflow: a run whose if: skips the job must not join it (issue #76).
+    report.call(name, "has a workflow-level concurrency; the queue must sit on the job, so a run whose if: skips the job never joins it (issue #76)") if w.key?("concurrency")
+    # Comments run the job only when Qodo's logins post them (issue #76). The allowlist is pinned
+    # here and must match the three scripts below, which read the same logins as Qodo's review.
+    qodo_if = %q{github.repository == 'lioramilbaum/lioramilbaum.github.io' && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(fromJSON('["qodo-code-review","qodo-code-review[bot]"]'), github.event.comment.user.login)))}
+    # Each script's live jq select is the login pair, then `and`, so an appended login fails. agent-run.sh
+    # breaks the select across lines, so whitespace is allowed. A match after a # on its line does not count.
+    qodo_select = %q{select((.author.login == "qodo-code-review" or .author.login == "qodo-code-review[bot]") and}
+    qodo_re = /select\(\(\.author\.login == "qodo-code-review" or \.author\.login == "qodo-code-review\[bot\]"\)\s*and\s/
+    ["/s/qodo-status.sh", "/s/generate-delivery.sh", "/s/agent-run.sh"].each do |copy|
+      text = File.exist?(copy) ? File.read(copy) : ""
+      live = false
+      pos = 0
+      while (m = qodo_re.match(text, pos))
+        prefix = text[0, m.begin(0)]
+        before = prefix[((prefix.rindex("\n") || -1) + 1)..]
+        live = true unless before.include?("#")
+        pos = m.end(0)
+      end
+      report.call(name, "#{copy} does not have the Qodo select #{qodo_select} on a live line; the allowlist must match the job's if: (issue #76)") unless live
+    end
     report.call(name, "does not have exactly one job") unless jobs.size == 1
     jobs.each do |jid, job|
       next report.call(name, "job #{jid} is not a mapping") unless job.is_a?(Hash)
       report.call(name, "job #{jid} runs-on is not ubuntu-26.04") unless job["runs-on"] == "ubuntu-26.04"
       report.call(name, "job #{jid} has its own permissions") if job.key?("permissions")
-      (job.keys - ["if", "runs-on", "timeout-minutes", "steps"]).each do |key|
-        report.call(name, "job #{jid} has key #{key}; only if, runs-on, timeout-minutes and steps are allowed")
+      (job.keys - ["if", "concurrency", "runs-on", "timeout-minutes", "steps"]).each do |key|
+        report.call(name, "job #{jid} has key #{key}; only if, concurrency, runs-on, timeout-minutes and steps are allowed")
       end
       job_if = job["if"].to_s
-      report.call(name, "job #{jid} if does not guard the repository and PR comments") unless job_if.include?("github.repository == 'lioramilbaum/lioramilbaum.github.io'") && job_if.include?("github.event.issue.pull_request")
+      report.call(name, "job #{jid} if is not exactly #{qodo_if}; a widened guard runs on other comments, and the allowlist must match qodo-status.sh, generate-delivery.sh and agent-run.sh (issue #76)") unless job_if.gsub(/\s+/, " ").strip == qodo_if
+      jconc = job["concurrency"].is_a?(Hash) ? job["concurrency"] : {}
+      report.call(name, "job #{jid} concurrency is not exactly group, cancel-in-progress: false and queue: max; a cancelled run leaves the PR head with a cancelled post-status check (issue #76)") unless jconc.keys.sort == ["cancel-in-progress", "group", "queue"] && jconc["cancel-in-progress"] == false && jconc["queue"] == "max"
+      jgroup = jconc["group"].to_s
+      report.call(name, "job #{jid} concurrency.group does not name the issue, pull request and dispatch PR numbers") unless ["github.event.issue.number", "github.event.pull_request.number", "inputs.pr"].all? { |e| jgroup.include?(e) }
       steps = Array(job["steps"])
       checkout = steps[0].is_a?(Hash) ? steps[0] : {}
       run_step = steps[1].is_a?(Hash) ? steps[1] : {}
@@ -221,6 +242,9 @@ docker run --rm --platform linux/amd64 --network none --user "$(id -u):$(id -g)"
   --entrypoint ruby \
   -e GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
   -v "$root/.github/workflows:/w:ro" \
+  -v "$root/scripts/qodo-status.sh:/s/qodo-status.sh:ro" \
+  -v "$root/scripts/generate-delivery.sh:/s/generate-delivery.sh:ro" \
+  -v "$root/scripts/agent-run.sh:/s/agent-run.sh:ro" \
   "ghcr.io/actions/jekyll-build-pages:$version" \
   -ryaml -e "$check_rb"
 
