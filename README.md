@@ -66,6 +66,7 @@ I'm Liora Milbaum, a platform engineering architect working across DevOps, AI an
 ## Platform Engineering
 
 - [Edge Appliance glossary](docs/edge-appliance/glossary.md)
+- [Tools I Investigate](docs/tools/index.md): my hands-on notes on the tools I investigate, each with its status and last-updated date.
 
 ## DevOps
 
