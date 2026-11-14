@@ -11,6 +11,12 @@ I'm Liora Milbaum, a platform engineering architect working across DevOps, AI an
 
 ## News
 
+- Nov 15, 2026
+
+  [Happy Sunday #2](https://luma.com/x53cwkbd)
+
+  Happy Sunday: a monthly 30-minute online meetup for people in tech, with no talks and no agenda. 11:30 Israel time.
+
 - Nov 10, 2026 · Advantech
 
   [Deploying Edge AI Across Heterogeneous Hardware: From Compatibility to Controlled Composition](https://www.advantech.com/hi-in/resources/industry-focus/deploying-edge-ai-across-heterogeneous-hardware-from-compatibility-to-controlled-composition)
