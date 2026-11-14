@@ -61,6 +61,72 @@ entries=$(section "News" | sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' | grep -oE
 (( entries >= 1 )) || fail "News list has no entries"
 (( entries <= 5 )) || fail "News list has $entries entries; the cap is 5"
 
+# One identity: the tagline is a single line, not a list of roles, and the
+# positioning line sits above News.
+grep -Eq '<p class="tagline">[^|<]+</p>' "$page" \
+  || fail "tagline is empty or a '|' list of roles; keep one identity"
+sed '/<h2[^>]*>News<\/h2>/,$d' "$page" | grep -Fq '<strong>Practical platforms. Open collaboration.</strong>' \
+  || fail "positioning line (Practical platforms. Open collaboration.) missing above ## News"
+grep -Fq '<meta name="viewport" content="width=device-width, initial-scale=1">' "$page" \
+  || fail "viewport meta tag missing from the homepage" _layouts/home.html
+
+# Featured work and the next steps come after News and before the topic sections.
+# kramdown renders the apostrophe in "Let's" as a typographic quote, so match any.
+together_h='Let[^<]*s work together'
+order=$(grep -oE "<h2[^>]*>(News|Featured work|${together_h}|Platform Engineering)</h2>" "$page" \
+  | sed -E 's/<[^>]*>//g; s/^Let.*/Together/' | tr '\n' '|' || true)
+[[ "$order" == "News|Featured work|Together|Platform Engineering|" ]] \
+  || fail "sections must run News, Featured work, Let's work together, Platform Engineering (got: ${order})"
+
+featured=$(section "Featured work")
+grep -Eq '<ul[^>]* class="news"' <<<"$featured" \
+  || fail "Featured work list lacks the news class ({: .news}) for its label lines"
+# Check each item on its own, so a duplicate in one item cannot hide a gap in another.
+rest=$(sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' <<<"$featured" | tr '\n' ' ')
+items=()
+while [[ "$rest" == *"<li"* ]]; do
+  rest=${rest#*<li}
+  items+=("${rest%%</li>*}")
+done
+(( ${#items[@]} == 3 )) || fail "Featured work has ${#items[@]} items; it needs 3"
+# Completed work says so; ongoing work is labelled ongoing.
+labels=('Article · Published Nov 10, 2026' 'Project · Ongoing' 'Experiment · Ongoing')
+hrefs=("$advantech" https://github.com/lioramilbaum/projectmesh /docs/qodo-software-factory-hackathon/)
+for i in 0 1 2; do
+  item=${items[i]} label=${labels[i]}
+  grep -Fq "<p>$label" <<<"$item" \
+    || fail "Featured work item $((i + 1)) lacks its label line: $label"
+  grep -Fq "href=\"${hrefs[i]}\"" <<<"$item" \
+    || fail "Featured work item $((i + 1)) ($label) lacks its link: ${hrefs[i]}"
+  for part in 'Problem:' 'My contribution:' 'Outcome( so far)?:'; do
+    n=$(grep -oE "<strong>$part</strong>" <<<"$item" | wc -l || true)
+    (( n == 1 )) || fail "Featured work item $((i + 1)) ($label) has $n '${part%%(*}' paragraphs; it needs one"
+  done
+done
+
+together=$(section "$together_h")
+for path in \
+  'Employers:</strong>[^<]*<a href="https://linkedin\.com/in/lmilbaum">' \
+  'Clients:</strong>[^<]*<a href="https://linkedin\.com/in/lmilbaum">' \
+  'Collaborators:</strong>.*href="https://github\.com/lmilbaum"' \
+  'Collaborators:</strong>.*href="https://github\.com/lioramilbaum/lioramilbaum\.github\.io/issues"'; do
+  grep -Eq "<li><strong>$path" <<<"$together" \
+    || fail "Let's work together lacks a next step: ${path%%:*} (${path#*href=})"
+done
+
+# No placeholder sections: every topic section holds at least one link.
+if grep -Eqi 'coming soon' "$page"; then
+  fail "placeholder 'Coming soon' text on the homepage"
+fi
+for heading in "Platform Engineering" "DevOps" "AI" "Open Source"; do
+  section "$heading" | grep -q '<a href=' || fail "## ${heading} has no link; no empty sections"
+done
+# The #rules anchor keeps the href from ending in .md, which the check below rejects.
+section "DevOps" | grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io/blob/main/AGENTS.md#rules"' \
+  || fail "AGENTS.md link missing from DevOps"
+section "Open Source" | grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io"' \
+  || fail "site repository link missing from Open Source"
+
 if grep -Eq 'href="[^"]*\.md"' "$page"; then
   fail "unrewritten .md link on homepage (jekyll-relative-links)"
 fi
