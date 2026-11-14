@@ -7,7 +7,10 @@ name: Qodo findings
 on:
   issue_comment:
     # Qodo edits its one review comment on each re-review and on each closed finding;
-    # an edit is not a push, so no pull_request event fires.
+    # an edit is not a push, so no pull_request event fires. Only comments by Qodo's logins run
+    # the job (the job's if:). A comment by anyone else still starts a run, but the if: skips
+    # its job before the job's concurrency applies, so that run joins no queue. GitHub's docs
+    # do not spell this ordering out; the design rests on it.
     types: [created, edited, deleted]
   pull_request_target:
     # A new head gets a status at once; Renovate PRs get success (exempt).
@@ -28,16 +31,24 @@ permissions:
   pull-requests: read
   statuses: write
 
-concurrency:
-  # One run per PR; a newer event (a Qodo edit) cancels a run still waiting to settle.
-  group: qodo-findings-${{ github.event.issue.number || github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: true
-
 jobs:
   post-status:
+    # The comment logins are the ones scripts/qodo-status.sh, generate-delivery.sh and
+    # agent-run.sh read as Qodo's review; check-workflows.sh pins this string and checks
+    # those three scripts (issue #76).
     if: >-
       github.repository == 'lioramilbaum/lioramilbaum.github.io' &&
-      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+      (github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(fromJSON('["qodo-code-review","qodo-code-review[bot]"]'), github.event.comment.user.login)))
+    # Runs for one PR queue one at a time (FIFO, up to 100 pending) and none is cancelled: a
+    # cancelled pull_request_target run stays on the PR head as a cancelled post-status check
+    # (issue_comment runs are not attached to the head, issue #76). Each run reads the PR head
+    # and Qodo's review when it runs (qodo-gate.sh keeps no state and re-reads before posting),
+    # so the last run posts the latest state. On the job, not the workflow: a run whose if:
+    # skips the job never joins this group, so other comments cannot fill the queue.
+    concurrency:
+      group: qodo-findings-${{ github.event.issue.number || github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
