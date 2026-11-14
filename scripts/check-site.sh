@@ -212,10 +212,60 @@ if grep -Eqi '@import|@font-face|fonts\.googleapis\.com|fonts\.gstatic\.com|use\
   fail "external font or stylesheet import on hackathon page" "$hackathon_md"
 fi
 
+# Tools I Investigate: the homepage links the index, and every entry page states
+# its status and last-updated date and is listed on the index.
+section "Platform Engineering" | grep -Fq 'href="/docs/tools/"' \
+  || fail "Tools I Investigate link missing from Platform Engineering"
+tools="$site/docs/tools/index.html"
+tools_md=docs/tools/index.md
+test -f "$tools" || fail "Tools I Investigate page was not built" "$tools_md"
+grep -Eq '<h1[^>]*>Tools I Investigate</h1>' "$tools" \
+  || fail "Tools I Investigate page lacks its heading" "$tools_md"
+grep -Fq 'Investigating a tool is not an endorsement.' "$tools" \
+  || fail "Tools I Investigate page lacks its no-endorsement line" "$tools_md"
+grep -Fq '<meta name="viewport" content="width=device-width, initial-scale=1">' "$tools" \
+  || fail "viewport meta tag missing from the Tools I Investigate page" _layouts/docs.html
+if grep -Eq 'href="[^":]*\.md"' "$tools"; then
+  fail "unrewritten .md link on the Tools I Investigate page (jekyll-relative-links)" "$tools_md"
+fi
+for p in docs/tools/_template.html docs/tools/_template.md docs/tools/_template/index.html; do
+  test ! -e "$site/$p" || fail "the tools entry template was published: $p" docs/tools/_template.md
+done
+shopt -s nullglob
+tool_pages=("$site"/docs/tools/*.html "$site"/docs/tools/*/index.html)
+shopt -u nullglob
+tool_entries=0
+for entry in "${tool_pages[@]}"; do
+  [[ "$entry" == "$tools" ]] && continue
+  tool_entries=$((tool_entries + 1))
+  name=${entry#"$site"/}
+  url=/${name%index.html}
+  grep -Eq '<strong>Official site:</strong> <a href="https?://[^"]+">' "$entry" \
+    || fail "tool entry $name lacks its Official site link" "$tools_md"
+  grep -Eq '<strong>Status:</strong> (Exploring: preliminary impressions|Evaluated: tested findings)' "$entry" \
+    || fail "tool entry $name lacks a Status line (tool_status exploring or evaluated)" "$tools_md"
+  grep -Eq '<strong>Last updated:</strong> [A-Z][a-z]{2} [0-9]{1,2}, [0-9]{4}' "$entry" \
+    || fail "tool entry $name lacks a Last updated date (last_updated)" "$tools_md"
+  grep -Fq "href=\"$url\"" "$tools" \
+    || fail "Tools I Investigate index does not link the entry $url" "$tools_md"
+done
+if grep -Fq 'Status unknown' "$tools"; then
+  fail "Tools I Investigate index lists an entry with no known status" "$tools_md"
+fi
+# No entry is a legitimate state (the initial list is the owner's to supply), but
+# then the index must say so, and it must not say so while it has entries.
+if (( tool_entries == 0 )); then
+  grep -Fq 'No investigation is published here yet.' "$tools" \
+    || fail "Tools I Investigate has no entry pages, and the index does not say so" "$tools_md"
+  echo "Tools I Investigate: no entry pages built; checked the index's empty state"
+elif grep -Fq 'No investigation is published here yet.' "$tools"; then
+  fail "Tools I Investigate has $tool_entries entry pages, but the index says none is published" "$tools_md"
+fi
+
 test -f "$site/favicon.ico" || fail "favicon.ico was not built"
 test -f "$site/assets/images/favicon.svg" || fail "favicon.svg was not built"
 test -f "$site/assets/images/apple-touch-icon.png" || fail "apple-touch-icon.png was not built"
-for p in "$page" "$site/docs/edge-appliance/glossary.html" "$hackathon"; do
+for p in "$page" "$site/docs/edge-appliance/glossary.html" "$hackathon" "$tools"; do
   grep -q 'rel="icon"' "$p" || fail "favicon link missing from $p"
 done
 
@@ -233,7 +283,7 @@ years=" $built_year "
 year=$(sed -nE 's/.*<footer>&copy; ([0-9]{4}) Liora Milbaum<\/footer>.*/\1/p' "$page")
 [[ -n "$year" && "$years" == *" $year "* ]] \
   || fail "footer year '${year}' is not the build year ($built_year) in index.html" _layouts/home.html
-for p in "$page" "$site/docs/edge-appliance/glossary.html" "$hackathon"; do
+for p in "$page" "$site/docs/edge-appliance/glossary.html" "$hackathon" "$tools"; do
   layout=_layouts/docs.html; [[ "$p" == "$page" ]] && layout=_layouts/home.html
   grep -Fq "<footer>&copy; $year Liora Milbaum</footer>" "$p" \
     || fail "footer year is not the build year ($year) in ${p#"$site"/}" "$layout"
