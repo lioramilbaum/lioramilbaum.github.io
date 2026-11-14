@@ -57,6 +57,23 @@ section "News" | grep -Fq "href=\"$advantech\"" \
 section "News" | grep -Fq 'Nov 10, 2026 · Advantech' \
   || fail "Advantech article's date and publisher line (Nov 10, 2026 · Advantech) missing from News"
 
+# Happy Sunday #2 is newer than the Advantech entry, so it comes above it
+# (newest first); a newer entry may still go above both. One News item per line.
+luma='https://luma.com/x53cwkbd'
+items=$(section "News" | sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' | tr '\n' ' ')
+items=${items//<li/$'\n'<li}
+happy=$(grep -F "href=\"$luma\"" <<<"$items" || true)
+[[ -n "$happy" ]] || fail "Happy Sunday #2 Luma link ($luma) missing from News"
+grep -Fq '<p>Nov 15, 2026</p>' <<<"$happy" \
+  || fail "Happy Sunday #2 News entry lacks its date line (Nov 15, 2026)"
+grep -Fq 'Happy Sunday: a monthly 30-minute online meetup for people in tech' <<<"$happy" \
+  || fail "Happy Sunday #2 News entry's summary does not name Happy Sunday as a monthly online meetup for people in tech"
+happy_n=$(grep -nF "href=\"$luma\"" <<<"$items" | head -n 1 | cut -d: -f1)
+advantech_n=$(grep -nF "href=\"$advantech\"" <<<"$items" | head -n 1 | cut -d: -f1 || true)
+[[ -n "$advantech_n" ]] || fail "Advantech article link missing from the News list"
+(( happy_n < advantech_n )) \
+  || fail "Happy Sunday #2 News entry must come above the Advantech entry (newest first)"
+
 entries=$(section "News" | sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' | grep -oE '<li[ >]' | wc -l || true)
 (( entries >= 1 )) || fail "News list has no entries"
 (( entries <= 5 )) || fail "News list has $entries entries; the cap is 5"
