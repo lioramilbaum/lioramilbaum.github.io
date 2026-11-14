@@ -81,7 +81,7 @@ B5. **Generate the doc.** From the repo root, run `scripts/generate-delivery.sh 
 
 B6. **Commit and push.**
    - `git add deliveries/`.
-   - Reused branch, if `git diff --cached --quiet` succeeds: nothing changed (the regenerated doc is byte-identical). Skip the commit and push, and go to B8.
+   - Reused branch, if `git diff --cached --quiet` succeeds: nothing changed (the regenerated doc is byte-identical). Skip the commit and push, run B7's assignee step on the existing PR, and go to B8.
    - `git diff --cached --name-only | grep -v '^deliveries/'` must print nothing.
    - New branch: `git commit -m "docs: add the delivery doc for PR #$N"`, then a `Co-Authored-By:` trailer line from the session's attribution reminder as the last line of the message.
    - Reused branch: read its subject with `git log -1 --format=%s`. A docs PR keeps one commit, so amend it: `git commit --amend -m "docs: add the delivery docs for PRs #A and #N"` (naming every PR whose doc the commit carries), with the same trailer as the last line.
@@ -90,7 +90,7 @@ B6. **Commit and push.**
    - New branch: `git push -u origin <branch>`. Reused branch: `git push --force-with-lease origin <branch>`.
 
 B7. **Open or update the docs PR.** The docs PR is not a draft: Qodo does not review drafts, so `qodo-findings` stays pending on a draft.
-   - New branch: `gh pr create --repo $REPO --base main --head lmilbaum:<branch> --title "docs: add the delivery doc for PR #$N" --body-file <file>`. Write the body in a file outside the repo. It has the template's sections (`.github/pull_request_template.md`) without the `Closes` line:
+   - New branch: `gh pr create --repo $REPO --base main --head lmilbaum:<branch> --assignee lmilbaum --title "docs: add the delivery doc for PR #$N" --body-file <file>`. Write the body in a file outside the repo. It has the template's sections (`.github/pull_request_template.md`) without the `Closes` line:
      - `## Acceptance criteria`: `No linked issue.`
      - `## Why`: this PR adds the delivery doc for PR #N, generated after it merged (AGENTS.md rule 6), as its hackathon evidence.
      - `## How`: one bullet per PR. `scripts/generate-delivery.sh --pr N` generated `<name>` from #N's description, its latest Check site run that passed before the merge, the merged head and merge-base builds, and Qodo's final review with its edit history. The doc records `head=<sha>` and `qodo-open=<value>`, and a screenshot line if there is one. Nothing is hand-written.
@@ -100,6 +100,7 @@ B7. **Open or update the docs PR.** The docs PR is not a draft: Qodo does not re
      - `## Hackathon` and `## Qodo notes`: empty.
      - Then the PR attribution line from the session's attribution reminder.
    - Reused branch: the PR exists. Read its body (`gh pr view <number> --repo $REPO --json body --jq .body`), append one `How` bullet and one `What` line for the new doc, update the `Why` list of PRs, and write it back with `gh pr edit <number> --repo $REPO --body-file <file>`. Set its title to the reused commit's subject with `--title`, so the title names the same PRs.
+   - Reused branch, every time (also when B6 skipped the commit): run `gh pr edit <number> --repo $REPO --add-assignee lmilbaum`. It is idempotent, so do not check first. If it fails, stop and report it: never assume the PR is assigned (AGENTS.md rule 11).
 
 B8. **Confirm on the docs PR.**
    - Run `scripts/generate-delivery.sh --pr $N --check` on the docs branch.
