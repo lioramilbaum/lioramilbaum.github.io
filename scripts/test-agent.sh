@@ -475,6 +475,7 @@ case_b_happy_path() {
   # The PR: on upstream, from the owner's fork, with the PR token, the closing line and the checklist.
   need grep -qF -- "pr create --repo $repo --head lmilbaum:fix/issue-41 --base main" "$fx/gh-calls.log"
   need grep -q 'pr create.*\[token=test-pr-token\]' "$fx/gh-calls.log"
+  need grep -q "pr create .*--assignee lmilbaum" "$fx/gh-calls.log"
   need contains "Closes #41" "$fx"/body-*.md
   need contains "$std_checklist" "$fx"/body-*.md
   need contains "stub why, call 1" "$fx"/body-*.md

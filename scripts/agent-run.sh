@@ -374,7 +374,7 @@ open_pr() {
     redact < "$io/pr-body.md"
     printf '\n%s\n' "$footer"
   } > "$work/pr-body.md"
-  url=$(pr_gh pr create --repo "$repo" --head "$owner:$branch" --base main --title "$subject" \
+  url=$(pr_gh pr create --repo "$repo" --head "$owner:$branch" --base main --assignee "$owner" --title "$subject" \
     --body-file "$work/pr-body.md") || stop "could not open the PR"
   pr=${url##*/}
   [[ "$pr" =~ ^[1-9][0-9]*$ ]] || stop "gh pr create printed no PR number: $url"
