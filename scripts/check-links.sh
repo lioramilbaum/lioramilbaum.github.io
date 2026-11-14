@@ -4,16 +4,17 @@
 # a built page and prints "<code> <url>". Exits non-zero if any response is not 2xx.
 # The LinkedIn share-offsite URL is skipped: it redirects to a login page.
 #
-# Checks start in batches of 10 background jobs, and each batch waits for its slowest
+# Checks start in batches of 12 background jobs, and each batch waits for its slowest
 # job before the next starts. A job takes at most one link's retry budget (about
 # 66 s), or about 200 s for a discussion comment lookup (up to 3 API pages, each with
 # the same budget). So the worst case is the sum over batches: 66 s for a batch of
-# links only, 200 s for a batch with a comment lookup. This page has 13 links and 7
-# comment lookups (20 jobs), in two batches of 10: 10 links, then 3 links and 7
+# links only, 200 s for a batch with a comment lookup. This page has 14 links and 8
+# comment lookups (22 jobs), in two batches of 12: 12 links, then 2 links and 8
 # lookups. The worst case is 66 s + 198 s = 264 s (a lookup is 3 pages of 66 s), inside
-# CI's 5-minute step timeout with 36 s to spare. The second batch is full: no job slots
-# are left. A 21st job starts a third batch, which adds at least 66 s and takes the
-# worst case past 300 s, so the time budget must change before a job past 20 is added.
+# CI's 5-minute step timeout with 36 s to spare. The second batch has two free slots:
+# a 23rd and a 24th job fit in it (one more day's link and comment lookup). A 25th job
+# starts a third batch, which adds at least 66 s and takes the worst case past 300 s,
+# so the time budget must change before a job past 24 is added.
 # Check that sum before adding links or comment lookups.
 #
 # Discussion comment links (https://github.com/<o>/<r>/discussions/<n>#discussioncomment-<id>)
@@ -72,7 +73,7 @@ comment() {
 }
 
 # At most $cap checks run at once: every $cap-th job waits for the batch before it.
-cap=10
+cap=12
 n=0
 start() {
   n=$((n + 1))

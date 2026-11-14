@@ -25,6 +25,7 @@ I'm participating in [Qodo](https://www.qodo.ai)'s [Build a Software Factory in 
 - [Day 5](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/7#discussioncomment-19599476)
 - [Day 6](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/8#discussioncomment-19607588)
 - [Day 7](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/9#discussioncomment-19618604)
+- [Day 8](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/10#discussioncomment-19620358)
 
 Later days are in the [discussions](https://github.com/qodo-hackathon/software-factory-hackathon/discussions).
 
