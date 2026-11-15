@@ -42,6 +42,7 @@ files = (Dir.glob("/w/*.yml") + Dir.glob("/w/*.yaml")).sort
 abort "error: no workflow files found" if files.empty?
 report.call("qodo-findings.yml", "is missing; the qodo-findings status is not set") unless files.any? { |f| File.basename(f) == "qodo-findings.yml" }
 report.call("agent-run.yml", "is missing; the agent run is not pinned") unless files.any? { |f| File.basename(f) == "agent-run.yml" }
+report.call("delivery-doc.yml", "is missing; the Delivery doc workflow is not pinned") unless files.any? { |f| File.basename(f) == "delivery-doc.yml" }
 
 files.each do |path|
   name = File.basename(path)
@@ -219,6 +220,64 @@ files.each do |path|
       secret_envs = agent["env"].is_a?(Hash) ? agent["env"].values.select { |v| v.to_s.include?("secrets.") } : []
       report.call(name, "job #{jid} run step env does not take exactly the three secrets") unless secret_envs.size == 3
       report.call(name, "secrets. appears outside the run step's env (a step, a job or the workflow)") unless w.to_s.scan("secrets.").size == secret_envs.size
+    end
+  end
+
+  # delivery-doc.yml runs the Delivery doc workflow after a merge (AGENTS.md rule 6). Its trigger, guard,
+  # permissions, concurrency, runner, timeout and steps are pinned here. The two PATs are on its run step
+  # only, and that step's env is exactly the values below (AGENTS.md Setup).
+  if name == "delivery-doc.yml"
+    text = File.read(path)
+    dispatch = on.is_a?(Hash) && on["workflow_dispatch"].is_a?(Hash) ? on["workflow_dispatch"] : {}
+    pr_input = dispatch["inputs"].is_a?(Hash) ? dispatch["inputs"]["pr"] : nil
+    report.call(name, "on: is not exactly push to main and workflow_dispatch with a required string pr input") unless on.is_a?(Hash) && on.keys.sort == ["push", "workflow_dispatch"] && on["push"] == { "branches" => ["main"] } && dispatch["inputs"].is_a?(Hash) && dispatch["inputs"].keys == ["pr"] && pr_input.is_a?(Hash) && pr_input["required"] == true && pr_input["type"] == "string"
+    report.call(name, "top-level permissions are not exactly contents, issues, pull-requests and actions read") unless w["permissions"] == { "contents" => "read", "issues" => "read", "pull-requests" => "read", "actions" => "read" }
+    report.call(name, "has a workflow-level env, defaults or concurrency; the job sets its own") if w.key?("env") || w.key?("defaults") || w.key?("concurrency")
+    report.call(name, "does not have exactly one job") unless jobs.size == 1
+    jobs.each do |jid, job|
+      next report.call(name, "job #{jid} is not a mapping") unless job.is_a?(Hash)
+      report.call(name, "job #{jid} if is not exactly this repository's main") unless job["if"].to_s.gsub(/\s+/, " ").strip == "github.repository == 'lioramilbaum/lioramilbaum.github.io' && github.ref == 'refs/heads/main'"
+      # One run at a time, none cancelled, queued (AGENTS.md rule 6): two merges in a minute land in one docs PR.
+      report.call(name, "job #{jid} concurrency is not exactly group delivery-doc, cancel-in-progress false and queue max") unless job["concurrency"] == { "group" => "delivery-doc", "cancel-in-progress" => false, "queue" => "max" }
+      report.call(name, "job #{jid} runs-on is not ubuntu-26.04") unless job["runs-on"] == "ubuntu-26.04"
+      report.call(name, "job #{jid} timeout-minutes is not 45") unless job["timeout-minutes"] == 45
+      report.call(name, "job #{jid} has its own permissions, env or defaults") if job.key?("permissions") || job.key?("env") || job.key?("defaults")
+      (job.keys - ["if", "concurrency", "runs-on", "timeout-minutes", "steps"]).each do |key|
+        report.call(name, "job #{jid} has key #{key}; only if, concurrency, runs-on, timeout-minutes and steps are allowed")
+      end
+      steps = Array(job["steps"])
+      checkout = steps[0].is_a?(Hash) ? steps[0] : {}
+      jq_step = steps[1].is_a?(Hash) ? steps[1] : {}
+      run_step = steps[2].is_a?(Hash) ? steps[2] : {}
+      pinned = steps.size == 3 &&
+        checkout.keys.sort == ["name", "uses", "with"] && checkout["uses"].to_s.start_with?("actions/checkout@") &&
+        checkout["with"] == { "fetch-depth" => 0, "persist-credentials" => false } &&
+        jq_step.keys.sort == ["name", "run", "shell"] && jq_step["shell"] == "bash" &&
+        jq_step["run"] == "command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }" &&
+        run_step.keys.sort == ["env", "name", "run", "shell"] && run_step["shell"] == "bash" &&
+        run_step["run"] == 'bash scripts/delivery-run.sh --event "$EVENT" --sha "$SHA" --pr "$PR"'
+      report.call(name, "job #{jid} steps are not exactly checkout (fetch-depth 0, persist-credentials false), the jq install and the run, in that order, with no other keys") unless pinned
+      # The run step's env is exactly these: the two PATs and nothing else holds a secret (AGENTS.md Setup).
+      expected_env = {
+        "EVENT" => "${{ github.event_name }}",
+        "SHA" => "${{ github.sha }}",
+        "PR" => "${{ inputs.pr }}",
+        "GH_TOKEN" => "${{ github.token }}",
+        "AGENT_FORK_TOKEN" => "${{ secrets.AGENT_FORK_TOKEN }}",
+        "AGENT_PR_TOKEN" => "${{ secrets.AGENT_PR_TOKEN }}",
+        "SERVE_HOST" => "0.0.0.0",
+      }
+      report.call(name, "job #{jid} run step env is not exactly EVENT, SHA, PR, GH_TOKEN, AGENT_FORK_TOKEN, AGENT_PR_TOKEN and SERVE_HOST, each with its value") unless run_step["env"] == expected_env
+      report.call(name, "secrets. appears outside the run step's env (the two PATs only)") unless w.to_s.scan("secrets.").size == 2
+      steps.each do |s|
+        next unless s.is_a?(Hash)
+        report.call(name, "job #{jid} has a run: with an expression; pass it through env:") if s["run"].to_s.include?("${{")
+      end
+      # Every uses: is a 40-character SHA with its # vX.Y.Z comment (AGENTS.md rule 5), read from the text,
+      # since the comment is not in the parsed YAML.
+      uses_lines = text.scan(/^\s*(?:- )?uses: .*$/)
+      report.call(name, "job #{jid} has no uses: line") if uses_lines.empty?
+      report.call(name, "job #{jid} has a uses: that is not a 40-character SHA with a # vX.Y.Z comment") unless uses_lines.all? { |l| l.match?(%r{uses: actions/checkout@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*\z}) }
     end
   end
 
