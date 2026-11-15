@@ -13,7 +13,10 @@
 #   --fetch REMOTE (default upstream): a Check site run's commit this clone lacks is fetched by SHA from REMOTE.
 #
 # Test hooks: BUILD_SITE (default scripts/build-site.sh, run in each worktree),
-# SNAPSHOT (default scripts/snapshot-site.sh), AWK. gh is found on PATH.
+# SNAPSHOT (default scripts/snapshot-site.sh), AWK, SERVE_HOST (the address the head build's
+# preview server binds: 127.0.0.1, the default, or 0.0.0.0, which the Delivery doc workflow sets
+# because host-gateway reaches only a server bound to every interface on native Linux). gh is
+# found on PATH.
 #
 # The doc records the final state: CI evidence cites the latest successful Check site
 # run whose head has the merged head's content digest, and Qodo's reviewed commits are
@@ -44,6 +47,11 @@ done
 
 awk=${AWK:-awk}
 die() { echo "error: $*" >&2; exit 1; }
+serve_host=${SERVE_HOST:-127.0.0.1}
+case "$serve_host" in
+  127.0.0.1 | 0.0.0.0) ;;
+  *) die "SERVE_HOST must be 127.0.0.1 or 0.0.0.0, not '$serve_host'" ;;
+esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/generate-delivery.XXXXXX")
 server_pid=""
@@ -186,8 +194,13 @@ D=$(bash "$root/scripts/check-delivery.sh" --digest "$head_sha" "$name")
 # Builds: the head, and the merge-base in its own worktree (its own build script).
 git worktree add --detach "$tmp/head" "$head_sha" >/dev/null 2>&1 || die "could not check out $head_sha"
 git worktree add --detach "$tmp/base" "$mb" >/dev/null 2>&1 || die "could not check out $mb"
-( cd "$tmp/head" && ${BUILD_SITE:-scripts/build-site.sh} ) >&2 || die "building the head failed"
-( cd "$tmp/base" && ${BUILD_SITE:-scripts/build-site.sh} ) >&2 || die "building the merge-base failed"
+# The builds run the PR's own code (the head's build script). GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN
+# are removed from the builds' environment, so they inherit none of them; code running as the same user
+# could still read the generator's environment from /proc. The generator's own gh calls keep the token.
+( cd "$tmp/head" && env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN "${BUILD_SITE:-scripts/build-site.sh}" ) >&2 \
+  || die "building the head failed"
+( cd "$tmp/base" && env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN "${BUILD_SITE:-scripts/build-site.sh}" ) >&2 \
+  || die "building the merge-base failed"
 
 # site_hash SITE: the hash of SITE's homepage manifest (AGENTS.md rule 7). It covers
 # index.html and each local file it loads: src="/..." and <link ... href="/...">.
@@ -231,7 +244,7 @@ serve_head() {
   local port
   port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()') \
     || die "could not pick a free port"
-  python3 -m http.server "$port" --bind 127.0.0.1 --directory "$tmp/head/_site" >"$tmp/http.log" 2>&1 &
+  python3 -m http.server "$port" --bind "$serve_host" --directory "$tmp/head/_site" >"$tmp/http.log" 2>&1 &
   server_pid=$!
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     if curl -fsS -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null; then

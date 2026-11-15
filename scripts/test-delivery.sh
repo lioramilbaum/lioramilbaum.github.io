@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the delivery-doc tooling (AGENTS.md rule 6): generate-delivery.sh, the
-# check in check-delivery.sh, and qodo-status.sh (AGENTS.md rule 9). Offline by default:
+# check in check-delivery.sh, qodo-status.sh (AGENTS.md rule 9), and delivery-run.sh (the Delivery
+# doc workflow, cases dr...). Offline by default:
 # no Docker and no network. Each case
 # builds a throwaway git repo with the real scripts and template. gh is a stub on PATH
 # that serves fixture JSON and applies --jq with jq. BUILD_SITE and SNAPSHOT are stubs.
@@ -93,8 +94,9 @@ mkdir -p "$bin"
 cat > "$bin/gh" <<'STUB'
 #!/usr/bin/env bash
 # Stub gh: serves $GH_FIXTURES files and applies --jq with jq. It logs every call's
-# argv. A -F value with "@" is what gh would read from a file: it is recorded as a
-# violation and the call fails.
+# argv, and the token it was given (gh-token.log: the first word is GH_TOKEN). A -F value
+# with "@" is what gh would read from a file: it is recorded as a violation and the call
+# fails. A --body-file is kept as body-<command>-<subcommand>.md.
 set -euo pipefail
 prev=""
 for arg in "$@"; do
@@ -106,15 +108,50 @@ for arg in "$@"; do
   prev=$arg
 done
 echo "$*" >> "$GH_FIXTURES/gh-calls.log"
+# One line per call: a GraphQL query has newlines, so its argv is joined before it is logged.
+echo "${GH_TOKEN:-none} $(printf '%s ' "$@" | tr '\n' ' ')" >> "$GH_FIXTURES/gh-token.log"
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = --body-file ]; then cp "$arg" "$GH_FIXTURES/body-$1-$2.md"; fi
+  prev=$arg
+done
 # A file named gh-fail-<command>-<subcommand> makes that call fail (qodo-status cases).
 if [ -e "$GH_FIXTURES/gh-fail-$1-$2" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+# gh-fail-add-assignee makes the --add-assignee edit fail (the delivery run cases).
+if [ "$1 $2" = "pr edit" ] && [ -e "$GH_FIXTURES/gh-fail-add-assignee" ]; then
+  case " $* " in *" --add-assignee "*) echo "gh: simulated failure" >&2; exit 1 ;; esac
+fi
 case "$1 $2" in
-  "pr view") fixture=$GH_FIXTURES/pr.json ;;
+  "pr view")
+    if [ -e "$GH_FIXTURES/pr-${3:-x}.fail" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+    fixture=$GH_FIXTURES/pr.json
+    if [ -e "$GH_FIXTURES/pr-${3:-x}.json" ]; then fixture=$GH_FIXTURES/pr-$3.json; fi
+    # pr-N-view-K.json answers the K-th view of PR N (a re-read that sees the head from before a push).
+    c=$(cat "$GH_FIXTURES/pr-${3:-x}-calls" 2>/dev/null || echo 0)
+    c=$((c + 1))
+    echo "$c" > "$GH_FIXTURES/pr-${3:-x}-calls"
+    if [ -e "$GH_FIXTURES/pr-${3:-x}-view-$c.json" ]; then fixture=$GH_FIXTURES/pr-$3-view-$c.json; fi ;;
+  "pr list") fixture=$GH_FIXTURES/prlist.json ;;
+  "pr create") fixture=$GH_FIXTURES/pr-create-out.txt ;;
+  "pr edit") fixture=/dev/null ;;
   "run list") fixture=$GH_FIXTURES/runs.json ;;
   "run view") fixture=$GH_FIXTURES/run-$3.json ;;
+  "api repos/"*"/commits/"*"/pulls")
+    # The lookup's n-th call reads pulls-n.json when the case has one, else pulls.json.
+    if [ -e "$GH_FIXTURES/gh-fail-commit-pulls" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+    n=$(cat "$GH_FIXTURES/pulls-calls" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "$GH_FIXTURES/pulls-calls"
+    fixture=$GH_FIXTURES/pulls-$n.json
+    [ -e "$fixture" ] || fixture=$GH_FIXTURES/pulls.json ;;
   "api repos/"*"/pulls/"*)
     if [ -e "$GH_FIXTURES/gh-fail-pulls" ]; then echo "gh: simulated failure" >&2; exit 1; fi
-    fixture=$GH_FIXTURES/pull.json ;;
+    # pull-N.json is PR N's pulls read; pull-N.404 and pull-N.500 make it fail (a missing PR, another error).
+    num=${2##*/}
+    if [ -e "$GH_FIXTURES/pull-$num.404" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    if [ -e "$GH_FIXTURES/pull-$num.500" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
+    fixture=$GH_FIXTURES/pull.json
+    if [ -e "$GH_FIXTURES/pull-$num.json" ]; then fixture=$GH_FIXTURES/pull-$num.json; fi ;;
   "api repos/"*"/statuses/"*)
     if [ -e "$GH_FIXTURES/gh-fail-status" ]; then echo "gh: simulated failure" >&2; exit 1; fi
     fixture=$GH_FIXTURES/status-reply.json ;;
@@ -128,13 +165,30 @@ case "$1 $2" in
       esac
     done
     case "$query" in
-      *comments\(*) fixture=$GH_FIXTURES/comments-${after:-null}.json ;;
+      *comments\(*)
+        # on-comments-read, when a case set it, runs at each comments read (a hook: the doc merging during the wait).
+        if [ -x "$GH_FIXTURES/on-comments-read" ]; then "$GH_FIXTURES/on-comments-read"; fi
+        # comments-poll-K.json answers the K-th comments read of the run (a Qodo review that settles later).
+        k=$(cat "$GH_FIXTURES/comments-calls" 2>/dev/null || echo 0)
+        k=$((k + 1))
+        echo "$k" > "$GH_FIXTURES/comments-calls"
+        fixture=$GH_FIXTURES/comments-poll-$k.json
+        [ -e "$fixture" ] || fixture=$GH_FIXTURES/comments-${after:-null}.json ;;
       *userContentEdits*) fixture=$GH_FIXTURES/edits-$id-${after:-first}.json ;;
+      *pullRequests\(*)
+        # merged-prs.json is the recently merged PRs (delivery run); merged-prs.fail makes the list fail.
+        if [ -e "$GH_FIXTURES/merged-prs.fail" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+        fixture=$GH_FIXTURES/merged-prs.json ;;
       *) echo "gh stub: unsupported query" >&2; exit 2 ;;
     esac
     ;;
   *) echo "gh stub: unsupported call: $*" >&2; exit 2 ;;
 esac
+# A fixture with @HEAD@ names this clone's HEAD (the PR's head as the run left it).
+if grep -q '@HEAD@' "$fixture" 2>/dev/null; then
+  sed "s/@HEAD@/$(git rev-parse HEAD)/" "$fixture" > "$GH_FIXTURES/resolved.json"
+  fixture=$GH_FIXTURES/resolved.json
+fi
 jq_expr=""
 prev=""
 for arg in "$@"; do
@@ -165,10 +219,52 @@ LIB
 
 cat > "$bin/build-site" <<'STUB'
 #!/usr/bin/env bash
-# Stub BUILD_SITE: the homepage is whatever site-src holds in this worktree.
+# Stub BUILD_SITE: the homepage is whatever site-src holds in this worktree. With GH_FIXTURES set it
+# logs the names of any token variable in its environment (build-env.log): the delivery run must not
+# pass the PATs or the read token to a build, which runs the merged head's code. The test checks the
+# build's environment only; it does not check /proc.
 set -euo pipefail
+if [ -n "${GH_FIXTURES:-}" ]; then
+  : >> "$GH_FIXTURES/build-env.log"
+  env | sed -En 's/^(AGENT_[A-Z_]*TOKEN|GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN)=.*/\1/p' >> "$GH_FIXTURES/build-env.log"
+fi
 rm -rf _site
 cp -R site-src _site
+STUB
+
+# git and python3 wrappers (delivery-run cases): each call's argv goes to git.log or python3.log
+# (when GH_FIXTURES is set), then the real tool runs. The tests check the push's lease and the
+# preview server's bind address.
+real_git=$(command -v git)
+real_python=$(command -v python3)
+sed "s|@REAL@|$real_git|" > "$bin/git" <<'STUB'
+#!/usr/bin/env bash
+# A push is answered the way git answers its credential prompts: GIT_ASKPASS is asked for the username and
+# the password, and askpass.log records both answers (the delivery run cases check the askpass script).
+if [ -n "${GH_FIXTURES:-}" ]; then
+  echo "$*" >> "$GH_FIXTURES/git.log"
+  case " $* " in
+    *" push "*)
+      if [ -n "${GIT_ASKPASS:-}" ]; then
+        u=$("$GIT_ASKPASS" "Username for 'https://github.com': ")
+        p=$("$GIT_ASKPASS" "Password for 'https://x-access-token@github.com': ")
+        echo "user=$u pass=$p" >> "$GH_FIXTURES/askpass.log"
+      fi ;;
+  esac
+fi
+exec @REAL@ "$@"
+STUB
+sed "s|@REAL@|$real_python|" > "$bin/python3" <<'STUB'
+#!/usr/bin/env bash
+[ -z "${GH_FIXTURES:-}" ] || echo "$*" >> "$GH_FIXTURES/python3.log"
+exec @REAL@ "$@"
+STUB
+
+# check-fail: a DELIVERY_CHECK stub that fails as check-delivery.sh does on a stale doc.
+cat > "$bin/check-fail" <<'STUB'
+#!/usr/bin/env bash
+echo "error: deliveries/2026-11-05-demo-change.md: stale: the doc was generated for other content" >&2
+exit 1
 STUB
 
 cat > "$bin/snapshot" <<'STUB'
@@ -196,7 +292,7 @@ cat > "$bin/nap" <<'STUB'
 echo "$*" >> "$GH_FIXTURES/naps.log"
 if [ -e "$GH_FIXTURES/clock-next" ]; then cp "$GH_FIXTURES/clock-next" "$GH_FIXTURES/clock"; fi
 STUB
-chmod +x "$bin/gh" "$bin/build-site" "$bin/snapshot" "$bin/date" "$bin/nap"
+chmod +x "$bin/gh" "$bin/build-site" "$bin/snapshot" "$bin/date" "$bin/nap" "$bin/git" "$bin/python3"
 
 # Helpers ---------------------------------------------------------------------
 
@@ -293,6 +389,7 @@ fx_pr() {
   jq -n --arg head "$1" --arg base "$BASE" --arg state "${PR_STATE:-MERGED}" --rawfile body "$2" \
     --arg merged "${PR_MERGED_AT-2026-11-06T00:00:00Z}" '{
     state: $state,
+    baseRefName: "main",
     title: "Demo change",
     createdAt: "2026-11-05T09:00:00Z",
     mergedAt: (if $merged == "" then null else $merged end),
@@ -2477,6 +2574,1251 @@ if [ -z "$agree_fail" ]; then
   report "agree. the generator's qodo-open and the gate's status agree on six Qodo reviews" 0
 else
   report "agree. the generator's qodo-open and the gate's status agree on six Qodo reviews" 1 "$agree_fail"
+fi
+
+# delivery-run.sh (the Delivery doc workflow, AGENTS.md rule 6). Each dr case runs the real script in
+# its clone, with the real generator, qodo-status.sh and check-delivery.sh. The stubs stand in for gh,
+# the builds and the screenshot; git and python3 are logged and then run for real. The clone's origin
+# is a bare repo holding main and the PR's ref at the clone's HEAD; the fork is a bare repo. GH_TOKEN is
+# READ-TOKEN, and the two PATs are FORK-TOKEN and PR-TOKEN: gh-token.log says which one each gh call saw.
+
+# dr_up: the clone's origin, a bare repo holding main and refs/pull/24/head at the clone's HEAD, and an
+# empty fork, a bare repo. Each call resets both.
+dr_up() {
+  DR_UP="$CASE-up.git"
+  DR_FORK="$CASE-fork.git"
+  rm -rf "$DR_UP" "$DR_FORK"
+  git init -q --bare "$DR_UP"
+  git init -q --bare "$DR_FORK"
+  git -C "$CASE" remote remove origin 2>/dev/null || true
+  git -C "$CASE" remote add origin "$DR_UP"
+  git -C "$CASE" push -q -f "$DR_UP" HEAD:refs/heads/main HEAD:refs/pull/24/head
+}
+
+# fx_pulls FILE SHA NUMBER...: the PRs a commit lookup returns, each merged into main at SHA.
+fx_pulls() {
+  local file=$1 sha=$2 out='[]' n
+  shift 2
+  for n in "$@"; do
+    out=$(jq -c --argjson n "$n" --arg sha "$sha" \
+      '. + [{number: $n, merged_at: "2026-11-06T00:00:00Z", merge_commit_sha: $sha, base: {ref: "main"}}]' <<< "$out")
+  done
+  printf '%s\n' "$out" > "$FX/$file"
+}
+
+# dr_finish: the fixtures and the origin for a run on the clone's HEAD as merged PR 24 (its body is
+# $FX/body.md): CI run 101 passing, Qodo's review clear, and the head pushed as main and as the PR's ref.
+dr_finish() {
+  local head
+  unset DR_EVENT DR_PR DR_SHA DR_NOW DR_READ_TOKEN DR_FORK_TOKEN DR_PR_TOKEN DR_SERVE_HOST DR_SLEEP DR_POLLS DR_CHECK
+  head=$(head_sha)
+  fx_pr "$head" "$FX/body.md"
+  fx_runs 101 "$head" success success
+  fx_qodo_clear "$head"
+  fx_pull open false someone
+  fx_pulls pulls.json "$head" 24
+  dr_up
+  echo '[]' > "$FX/prlist.json"
+  echo 'https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' > "$FX/pr-create-out.txt"
+  echo '{"state": "OPEN", "headRefOid": "@HEAD@", "body": ""}' > "$FX/pr-104.json"
+  cp "$root/scripts/delivery-run.sh" "$root/scripts/qodo-status.sh" "$CASE/scripts/"
+  printf 'scripts/delivery-run.sh\nscripts/qodo-status.sh\n' >> "$CASE/.git/info/exclude"
+  echo '2026-11-06T12:00:00Z' > "$FX/clock"
+  # The recently merged PRs into main: none, so a commit with no PR found by its lookup is a direct push.
+  echo '{"data": {"repository": {"pullRequests": {"nodes": []}}}}' > "$FX/merged-prs.json"
+}
+
+# dr_case NAME CHANGE BODY: pr_case's clone and PR, then the run's fixtures (dr_finish).
+dr_case() {
+  pr_case "$1" "$2" "$3"
+  dr_finish
+}
+
+# dr_run: runs scripts/delivery-run.sh in the case as the workflow runs it: the tokens, SERVE_HOST
+# 0.0.0.0, and the window open at NOW. The DR_* variables override these (an empty value is a missing
+# token): DR_EVENT (push), DR_PR, DR_SHA (the HEAD), DR_NOW, DR_READ_TOKEN, DR_FORK_TOKEN, DR_PR_TOKEN,
+# DR_SERVE_HOST, DR_SLEEP (0), DR_POLLS (40), DR_CHECK (a replacement for check-delivery.sh). Each run's
+# logs start empty. Its output goes to $FX/run.log and its status to DR_RC.
+dr_run() {
+  DR_RC=0
+  : > "$FX/gh-calls.log"
+  : > "$FX/gh-token.log"
+  : > "$FX/git.log"
+  : > "$FX/python3.log"
+  : > "$FX/build-env.log"
+  : > "$FX/askpass.log"
+  rm -f "$FX/pulls-calls" "$FX/comments-calls" "$FX"/pr-*-calls
+  (cd "$CASE" && env PATH="$bin:$PATH" GH_FIXTURES="$FX" \
+    GH_TOKEN="${DR_READ_TOKEN-READ-TOKEN}" AGENT_FORK_TOKEN="${DR_FORK_TOKEN-FORK-TOKEN}" \
+    AGENT_PR_TOKEN="${DR_PR_TOKEN-PR-TOKEN}" SERVE_HOST="${DR_SERVE_HOST-0.0.0.0}" \
+    NOW="${DR_NOW-$NOW}" DELIVERY_SLEEP="${DR_SLEEP-0}" DELIVERY_QODO_POLLS="${DR_POLLS-40}" \
+    DELIVERY_FORK_URL="$DR_FORK" BUILD_SITE="$bin/build-site" SNAPSHOT="$bin/snapshot" \
+    ${DR_CHECK:+DELIVERY_CHECK="$DR_CHECK"} \
+    bash scripts/delivery-run.sh --event "${DR_EVENT-push}" --sha "${DR_SHA-$(head_sha)}" --pr "${DR_PR-}") \
+    > "$FX/run.log" 2>&1 || DR_RC=$?
+  return 0
+}
+
+# dr_scratch: a clone of the case in $FX/scratch, where the fork's commits are made (W is its path).
+dr_scratch() {
+  rm -rf "$FX/scratch"
+  git clone -q "$CASE" "$FX/scratch"
+  W="$FX/scratch"
+}
+
+# dr_commit ARGS: a commit in the scratch clone, with a test identity.
+dr_commit() { git -C "$W" -c user.name=test -c user.email=t@example.invalid commit -q "$@"; }
+
+# dr_doc23 BRANCH: the fork's BRANCH, one commit above the base, adding PR 23's delivery doc. PR 23's
+# head (C23, a commit on the base) is the origin's refs/pull/23/head and is fetched into the case, so the
+# check can read it. Sets C23 and FORK_SHA (the branch's commit).
+dr_doc23() {
+  dr_scratch
+  git -C "$W" checkout -q -b pr23 "$BASE"
+  printf 'twenty-three\n' > "$W/notes23.txt"
+  git -C "$W" add -A
+  dr_commit -m "PR 23"
+  C23=$(git -C "$W" rev-parse HEAD)
+  git -C "$W" checkout -q -b "$1" "$BASE"
+  local digest
+  digest=$(cd "$W" && bash scripts/check-delivery.sh --digest "$C23" deliveries/2026-11-04-p23.md)
+  printf '# Delivery 23\n\n**PR:** [#23](https://github.com/lioramilbaum/lioramilbaum.github.io/pull/23) · **Opened:** 2026-11-04\n\n<!-- delivery: content=%s head=%s homepage=none qodo-open=0 -->\n' \
+    "$digest" "$C23" > "$W/deliveries/2026-11-04-p23.md"
+  git -C "$W" add -A
+  dr_commit -m "docs: add the delivery doc for PR #23"
+  FORK_SHA=$(git -C "$W" rev-parse HEAD)
+  git -C "$W" push -q "$DR_FORK" "$1:refs/heads/$1"
+  git -C "$W" push -q "$DR_UP" "pr23:refs/pull/23/head"
+  git -C "$CASE" fetch -q "$W" "+refs/heads/pr23:refs/scratch/pr23" "+refs/heads/$1:refs/scratch/$1"
+}
+
+# dr_reuse BRANCH HEADSHA: the one open docs PR, number 103, on the fork's BRANCH, with its listing and its
+# view. Its body has a Hackathon and a Qodo notes section, which the run must carry over.
+dr_reuse() {
+  printf '[{"number": 103, "headRefName": "%s", "headRepositoryOwner": {"login": "lmilbaum"}, "baseRefName": "main", "files": [{"path": "deliveries/2026-11-04-p23.md"}]}]\n' "$1" > "$FX/prlist.json"
+  cat > "$FX/reuse-body.md" <<'BODY'
+## Acceptance criteria
+
+No linked issue.
+
+## Why
+
+An older body.
+
+## Hackathon
+
+Day 4: Demo (https://github.com/orgs/qodo-hackathon/discussions/10)
+
+## Qodo notes
+
+Kept note: the screenshot point was fair.
+BODY
+  jq -n --arg head "$2" --rawfile body "$FX/reuse-body.md" '{state: "OPEN", headRefOid: $head, body: $body}' > "$FX/pr-103.json"
+}
+
+# body_has FILE LINE...: each LINE is a line of FILE.
+body_has() {
+  local f=$1 l
+  shift
+  for l in "$@"; do
+    grep -qxF -- "$l" "$f" || return 1
+  done
+}
+
+# fork_has BRANCH: the fork has BRANCH.
+fork_has() { git -C "$DR_FORK" rev-parse -q --verify "refs/heads/$1" >/dev/null 2>&1; }
+
+# pushed_to_fork: the run's git calls include a push.
+pushed_to_fork() { grep -qF -- ' push ' "$FX/git.log"; }
+
+# no_writes: the run made no PR write (pr edit, pr create) and no push to the fork. A skip path must make neither.
+no_writes() { ! grep -qF -- 'pr edit' "$FX/gh-calls.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; }
+
+# token_ok: every gh call saw READ-TOKEN, except the PR writes (pr create and pr edit), which saw
+# PR-TOKEN; and the run made at least one PR write.
+token_ok() {
+  awk '
+    { t = $1; $1 = ""; w = ($0 ~ / pr (create|edit) /) }
+    w { writes++; if (t != "PR-TOKEN") bad = 1; next }
+    { if (t != "READ-TOKEN") bad = 1 }
+    END { exit (bad || writes == 0) ? 1 : 0 }' "$FX/gh-token.log"
+}
+
+# dr_detail: a failed case's status and the end of the run's log.
+dr_detail() { echo "rc $DR_RC: $(tail -n 4 "$FX/run.log" | tr '\n' ' ')"; }
+
+# The delivery run's section list, in the template's order (AGENTS.md rule 6 and the PR template).
+dr_sections=('## Acceptance criteria' 'No linked issue.' '## Why' '## How' '## What'
+  '## Assistance and third-party material' '## Limitations' '## Hackathon' '## Qodo notes')
+
+# dr1. A merged code PR and no docs PR open: the doc is made and checked, committed to a new branch on the
+# fork as the owner (no trailer), and the docs PR is opened with the PR token, assigned to the owner, with
+# the template's sections and no footer.
+dr_case dr1 other plain
+dr_run
+if [ "$DR_RC" -eq 0 ] \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && grep -qF "$doc_name is current" "$FX/run.log" \
+  && grep -qF 'docs PR: 1 delivery doc(s) checked' "$FX/run.log" \
+  && grep -qF -- 'pr create --repo lioramilbaum/lioramilbaum.github.io --base main --head lmilbaum:docs/delivery-pr-24 --assignee lmilbaum --title docs: add the delivery doc for PR #24' "$FX/gh-calls.log" \
+  && grep -qF -- 'pr edit 104 --repo lioramilbaum/lioramilbaum.github.io --add-assignee lmilbaum' "$FX/gh-calls.log" \
+  && [ "$(git -C "$DR_FORK" log -1 --format='%an <%ae>|%s' refs/heads/docs/delivery-pr-24)" = 'Liora Milbaum <7271026+lmilbaum@users.noreply.github.com>|docs: add the delivery doc for PR #24' ] \
+  && ! git -C "$DR_FORK" log -1 --format=%B refs/heads/docs/delivery-pr-24 | grep -qi 'co-authored-by' \
+  && git -C "$DR_FORK" show --name-only --format= refs/heads/docs/delivery-pr-24 | grep -qxF "$doc_name" \
+  && body_has "$FX/body-pr-create.md" "${dr_sections[@]}" \
+  && ! grep -qF 'Generated with' "$FX/body-pr-create.md" \
+  && grep -qF -- 'push --quiet -u ' "$FX/git.log" \
+  && grep -qF -- '--limit 1000' "$FX/gh-calls.log" \
+  && token_ok; then
+  report "dr1. a new docs PR: created with the PR token, assigned, checked, the owner's commit and body" 0
+else
+  report "dr1. a new docs PR: created with the PR token, assigned, checked, the owner's commit and body" 1 "$(dr_detail)"
+fi
+
+# dr2. An open docs PR for PR 23 on the fork: its one commit is rebased onto main and amended with PR 24's
+# doc. The commit, the title and the body name both PRs; the body keeps its Hackathon and Qodo notes; the
+# push is leased to the commit the run started from; and the fork has one commit above main.
+dr_case dr2 other plain
+dr_doc23 docs/delivery-pr-23
+start_sha=$FORK_SHA
+pr_head=$(head_sha)
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -eq 0 ] \
+  && [ "$(git -C "$DR_FORK" rev-list --count "$pr_head..refs/heads/docs/delivery-pr-23")" = 1 ] \
+  && [ "$(git -C "$DR_FORK" rev-parse 'refs/heads/docs/delivery-pr-23^')" = "$pr_head" ] \
+  && [ "$(git -C "$DR_FORK" log -1 --format=%s refs/heads/docs/delivery-pr-23)" = 'docs: add the delivery docs for PRs #23 and #24' ] \
+  && git -C "$DR_FORK" show --name-only --format= refs/heads/docs/delivery-pr-23 | grep -qxF "$doc_name" \
+  && git -C "$DR_FORK" show --name-only --format= refs/heads/docs/delivery-pr-23 | grep -qxF deliveries/2026-11-04-p23.md \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --title docs: add the delivery docs for PRs #23 and #24 --body-file' "$FX/gh-calls.log" \
+  && grep -qF 'Kept note: the screenshot point was fair.' "$FX/body-pr-edit.md" \
+  && grep -qF 'Day 4: Demo' "$FX/body-pr-edit.md" \
+  && grep -qF -- "--force-with-lease=refs/heads/docs/delivery-pr-23:$start_sha" "$FX/git.log" \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --add-assignee lmilbaum' "$FX/gh-calls.log" \
+  && grep -qF 'docs PR: 2 delivery doc(s) checked' "$FX/run.log" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/103' "$FX/run.log" \
+  && token_ok; then
+  report "dr2. a reused docs PR: one amended commit rebased on main, both PRs named, notes kept, lease on the start commit" 0
+else
+  report "dr2. a reused docs PR: one amended commit rebased on main, both PRs named, notes kept, lease on the start commit" 1 "$(dr_detail)"
+fi
+
+# dr3. The docs PR already holds PR 24's doc, byte for byte as the run regenerates it: nothing is committed or
+# pushed, the title and body are left alone, and the owner is still assigned.
+dr_case dr3 other plain
+gen "$CASE"
+gen_ok=$GEN_RC
+cp "$CASE/$doc_name" "$FX/doc24.md"
+rm -rf "$CASE/$doc_name" "$CASE/deliveries/$stem"
+dr_doc23 docs/delivery-pr-23
+cp "$FX/doc24.md" "$W/$doc_name"
+git -C "$W" add -A
+dr_commit --amend --no-edit
+git -C "$W" push -q -f "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+FORK_SHA=$(git -C "$W" rev-parse HEAD)
+git -C "$CASE" fetch -q "$W" "+refs/heads/docs/delivery-pr-23:refs/scratch/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 "$FORK_SHA"
+dr_run
+if [ "$gen_ok" -eq 0 ] && [ "$DR_RC" -eq 0 ] \
+  && grep -qF 'no change: the doc for PR #24 is already current on docs/delivery-pr-23; the docs PR'\''s base is not refreshed' "$FX/run.log" \
+  && [ "$(git -C "$DR_FORK" rev-parse refs/heads/docs/delivery-pr-23)" = "$FORK_SHA" ] \
+  && ! pushed_to_fork \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --title docs: add the delivery docs for PRs #23 and #24 --body-file' "$FX/gh-calls.log" \
+  && grep -qF 'Kept note: the screenshot point was fair.' "$FX/body-pr-edit.md" \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --add-assignee lmilbaum' "$FX/gh-calls.log" \
+  && token_ok; then
+  report "dr3. a byte-identical regeneration of a reused docs PR: no commit, no push, still assigned" 0
+else
+  report "dr3. a byte-identical regeneration of a reused docs PR: no commit, no push, still assigned" 1 "gen $gen_ok; $(dr_detail)"
+fi
+
+# dr4. A Renovate PR is skipped, and the log says why.
+dr_case dr4 other plain
+fx_pull closed false 'renovate[bot]'
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: PR #24 is a Renovate PR (exempt, AGENTS.md rule 6)' "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
+  report "dr4. a Renovate PR is skipped: exit 0, the reason logged, no push and no PR" 0
+else
+  report "dr4. a Renovate PR is skipped: exit 0, the reason logged, no push and no PR" 1 "$(dr_detail)"
+fi
+
+# dr5. A PR whose every changed path is under deliveries/ is a docs PR: skipped, on a manual dispatch too.
+new_case dr5
+printf 'a docs change\n' > "$CASE/deliveries/2026-11-05-docs-only.md"
+commit_all "a docs PR"
+body_plain > "$FX/body.md"
+dr_finish
+DR_EVENT=workflow_dispatch
+DR_PR=24
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: PR #24 is a docs PR' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
+  && ! pushed_to_fork; then
+  report "dr5. a docs PR is skipped (every changed path under deliveries/): exit 0, the reason logged" 0
+else
+  report "dr5. a docs PR is skipped (every changed path under deliveries/): exit 0, the reason logged" 1 "$(dr_detail)"
+fi
+
+# dr6. A push whose commit merged no PR (a direct push): both lookups are empty, so the run retries once and
+# then skips, with the reason logged.
+dr_case dr6 other plain
+echo '[]' > "$FX/pulls.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: no merged PR has merge commit' "$FX/run.log" \
+  && grep -qF 'a direct push' "$FX/run.log" && [ "$(grep -cF 'commits/' "$FX/gh-calls.log")" = 4 ] \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr6. a direct push: the lookup retried once, both empty, skipped with the reason" 0
+else
+  report "dr6. a direct push: the lookup retried once, both empty, skipped with the reason" 1 "$(dr_detail)"
+fi
+
+# dr6b. The lookup counts only PRs merged into main: a PR merged into another branch, and an unmerged one
+# that names the commit, are not the commit's PR, so the push is a direct one.
+dr_case dr6b other plain
+h=$(head_sha)
+printf '[{"number": 24, "merged_at": "2026-11-06T00:00:00Z", "merge_commit_sha": "%s", "base": {"ref": "release"}}, {"number": 25, "merged_at": null, "merge_commit_sha": "%s", "base": {"ref": "main"}}]\n' "$h" "$h" > "$FX/pulls.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'a direct push' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr6b. the lookup ignores a PR merged into another branch and an unmerged one" 0
+else
+  report "dr6b. the lookup ignores a PR merged into another branch and an unmerged one" 1 "$(dr_detail)"
+fi
+
+# dr7. After the window ends, the run skips before it reads anything from GitHub.
+dr_case dr7 other plain
+DR_NOW=2026-12-13T00:00:00Z
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: the delivery window ended at 2026-12-12T23:00:00Z' "$FX/run.log" \
+  && [ ! -s "$FX/gh-calls.log" ]; then
+  report "dr7. after the window ends: exit 0, the reason logged, no GitHub call" 0
+else
+  report "dr7. after the window ends: exit 0, the reason logged, no GitHub call" 1 "$(dr_detail)"
+fi
+
+# dr8. The doc is already on main (the regeneration of an existing doc): skipped, nothing is made or pushed.
+dr_case dr8 other plain
+h24=$(head_sha)
+gen "$CASE"
+gen_ok=$GEN_RC
+commit_all "the delivery doc for PR 24, on main"
+git -C "$CASE" push -q -f "$DR_UP" HEAD:refs/heads/main
+DR_SHA=$h24
+dr_run
+if [ "$gen_ok" -eq 0 ] && no_writes && [ "$DR_RC" -eq 0 ] && grep -qF "skipped: $doc_name is already on main" "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
+  report "dr8. a doc already on main is skipped: nothing made, nothing pushed" 0
+else
+  report "dr8. a doc already on main is skipped: nothing made, nothing pushed" 1 "gen $gen_ok; $(dr_detail)"
+fi
+
+# dr9. The lookup's first try finds nothing and its retry finds PR 24: the run goes on and opens the docs PR.
+dr_case dr9 other plain
+echo '[]' > "$FX/pulls-1.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && [ "$(grep -cF 'commits/' "$FX/gh-calls.log")" = 2 ]; then
+  report "dr9. the lookup retry finds the PR on the second try and the run goes on" 0
+else
+  report "dr9. the lookup retry finds the PR on the second try and the run goes on" 1 "$(dr_detail)"
+fi
+
+# dr10. The commit lookup fails: the run fails, names it, and opens nothing.
+dr_case dr10 other plain
+touch "$FX/gh-fail-commit-pulls"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not list the PRs of commit' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr10. the commit lookup fails: red, named, nothing pushed" 0
+else
+  report "dr10. the commit lookup fails: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr11. The commit matches two merged PRs: the run cannot tell which one, so it fails.
+dr_case dr11 other plain
+fx_pulls pulls.json "$(head_sha)" 24 25
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF '2 merged PRs have merge commit' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr11. two merged PRs for one commit: red, named" 0
+else
+  report "dr11. two merged PRs for one commit: red, named" 1 "$(dr_detail)"
+fi
+
+# dr12. A manual run for a PR that is not merged: red, named, nothing pushed.
+dr_case dr12 other plain
+PR_STATE=OPEN
+PR_MERGED_AT=
+fx_pr "$(head_sha)" "$FX/body.md"
+unset PR_STATE PR_MERGED_AT
+DR_EVENT=workflow_dispatch
+DR_PR=24
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'PR #24 is not merged (its state is OPEN)' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr12. a dispatch of an unmerged PR: red, named" 0
+else
+  report "dr12. a dispatch of an unmerged PR: red, named" 1 "$(dr_detail)"
+fi
+
+# dr13. A PR that changes no files has no doc to make: red, named.
+new_case dr13
+commit_all "an empty change"
+body_plain > "$FX/body.md"
+dr_finish
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'PR #24 changes no files' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr13. a PR with an empty diff: red, named" 0
+else
+  report "dr13. a PR with an empty diff: red, named" 1 "$(dr_detail)"
+fi
+
+# dr14. Qodo's review names the head but was edited a minute ago: still waiting after the polls, so red.
+dr_case dr14 other plain
+fx_qodo_clear "$(head_sha)"
+fx_qodo_edited_at 2026-11-06T11:59:00Z
+DR_POLLS=2
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'did not settle after 2 polls: still waiting' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr14. Qodo still waiting after the polls: red, named, nothing pushed" 0
+else
+  report "dr14. Qodo still waiting after the polls: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr15. qodo-status.sh cannot read Qodo's review (exit 1): red, with its message.
+dr_case dr15 other plain
+touch "$FX/gh-fail-api-graphql"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'scripts/qodo-status.sh failed (exit 1)' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr15. qodo-status.sh exits 1: red, with its message" 0
+else
+  report "dr15. qodo-status.sh exits 1: red, with its message" 1 "$(dr_detail)"
+fi
+
+# dr16. The PR description has no ## Why: the generator refuses, the run is red, and nothing is pushed or
+# opened.
+dr_case dr16 other plain
+printf '## How\n\nNo why here.\n\n## What\n\nx\n\n## Assistance and third-party material\n\ny\n\n## Limitations\n\nz\n' > "$FX/body.md"
+fx_pr "$(head_sha)" "$FX/body.md"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "has no '## Why' section" "$FX/run.log" && ! fork_has docs/delivery-pr-24 \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr16. the generator fails (no ## Why): red, its message, nothing pushed or opened" 0
+else
+  report "dr16. the generator fails (no ## Why): red, its message, nothing pushed or opened" 1 "$(dr_detail)"
+fi
+
+# dr17. Qodo's final review has no finding the generator can parse (qodo-open unknown): nothing is committed.
+dr_case dr17 other plain
+printf '<h3>Code Review by Qodo</h3>\n\n<p>Qodo finished a pass on this change.</p>\n\n<!-- qodo-self-review-slot -->\n<!-- https://github.com/lioramilbaum/lioramilbaum.github.io/commit/%s -->\n' "$(head_sha)" > "$FX/ag.md"
+fx_qodo "$FX/ag.md"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'records qodo-open unknown' "$FX/run.log" && ! fork_has docs/delivery-pr-24 \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr17. qodo-open unknown: red, nothing committed or pushed" 0
+else
+  report "dr17. qodo-open unknown: red, nothing committed or pushed" 1 "$(dr_detail)"
+fi
+
+# dr18. The generator (or anything else) leaves a file outside the doc and its screenshot directory: red.
+dr_case dr18 other plain
+printf 'stray\n' > "$CASE/stray.txt"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'changed files outside deliveries/' "$FX/run.log" && grep -qF 'stray.txt' "$FX/run.log" \
+  && ! fork_has docs/delivery-pr-24; then
+  report "dr18. a stray file outside the doc: red, named, nothing pushed" 0
+else
+  report "dr18. a stray file outside the doc: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr19. Two open docs PRs: the run cannot tell which one to add to, so it fails.
+dr_case dr19 other plain
+printf '[{"number": 103, "headRefName": "docs/delivery-pr-23", "headRepositoryOwner": {"login": "lmilbaum"}, "baseRefName": "main", "files": [{"path": "deliveries/a.md"}]}, {"number": 105, "headRefName": "docs/delivery-pr-22", "headRepositoryOwner": {"login": "lmilbaum"}, "baseRefName": "main", "files": [{"path": "deliveries/b.md"}]}]\n' > "$FX/prlist.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF '2 open docs PRs' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr19. two open docs PRs: red, named" 0
+else
+  report "dr19. two open docs PRs: red, named" 1 "$(dr_detail)"
+fi
+
+# dr20. The reused docs PR's branch has two commits: red, nothing pushed.
+dr_case dr20 other plain
+dr_doc23 docs/delivery-pr-23
+printf 'extra\n' > "$W/deliveries/2026-11-04-extra.md"
+git -C "$W" add -A
+dr_commit -m "a second commit"
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'has 2 commits above main' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr20. a reused branch with two commits: red, named, nothing pushed" 0
+else
+  report "dr20. a reused branch with two commits: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr21. The reused branch's one commit changes a file outside deliveries/ (the listing said it was a docs PR):
+# red, named.
+dr_case dr21 other plain
+dr_scratch
+git -C "$W" checkout -q -b docs/delivery-pr-23 "$BASE"
+printf 'outside\n' > "$W/outside.txt"
+printf '# Delivery 23\n' > "$W/deliveries/2026-11-04-p23.md"
+git -C "$W" add -A
+dr_commit -m "a mixed commit"
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'changes files outside deliveries/: outside.txt' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr21. a reused branch that changes a file outside deliveries/: red, named" 0
+else
+  report "dr21. a reused branch that changes a file outside deliveries/: red, named" 1 "$(dr_detail)"
+fi
+
+# dr22. The reused branch's commit adds a doc that main also adds, differently: the rebase conflicts. Red,
+# nothing pushed.
+pr_case dr22 other plain
+printf 'main version\n' > "$CASE/deliveries/2026-11-05-clash.md"
+commit_all "main adds a clashing doc"
+dr_finish
+dr_scratch
+git -C "$W" checkout -q -b docs/delivery-pr-23 "$BASE"
+printf 'fork version\n' > "$W/deliveries/2026-11-05-clash.md"
+git -C "$W" add -A
+dr_commit -m "a clashing doc"
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'conflicts; nothing is pushed' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr22. the rebase onto main conflicts: red, nothing pushed" 0
+else
+  report "dr22. the rebase onto main conflicts: red, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr23. The check of the new commit fails (a replacement check stands in): red, and nothing is pushed.
+dr_case dr23 other plain
+DR_CHECK="$bin/check-fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'the check of the new commit failed; nothing is pushed' "$FX/run.log" \
+  && ! pushed_to_fork && ! fork_has docs/delivery-pr-24; then
+  report "dr23. the check of the new commit fails: red, nothing pushed" 0
+else
+  report "dr23. the check of the new commit fails: red, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr24. The fork cannot be read (it does not exist): the read of its branch fails first, so the run is red,
+# names the read, and opens no PR.
+dr_case dr24 other plain
+DR_FORK="$tmp/no-such-fork.git"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read docs/delivery-pr-24 on the fork' "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr24. the fork cannot be read (no such fork): red, named, no PR opened" 0
+else
+  report "dr24. the fork cannot be read (no such fork): red, named, no PR opened" 1 "$(dr_detail)"
+fi
+
+# dr25. gh pr create fails: red, named.
+dr_case dr25 other plain
+touch "$FX/gh-fail-pr-create"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not open the docs PR' "$FX/run.log"; then
+  report "dr25. gh pr create fails: red, named" 0
+else
+  report "dr25. gh pr create fails: red, named" 1 "$(dr_detail)"
+fi
+
+# dr26. The docs PR opens, but its assignee edit fails: red, named.
+dr_case dr26 other plain
+touch "$FX/gh-fail-add-assignee"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not assign lmilbaum to docs PR #104' "$FX/run.log"; then
+  report "dr26. the assignee edit fails: red, named" 0
+else
+  report "dr26. the assignee edit fails: red, named" 1 "$(dr_detail)"
+fi
+
+# dr27. After the push the docs PR is not OPEN: red, named.
+dr_case dr27 other plain
+printf '{"state": "CLOSED", "headRefOid": "@HEAD@", "body": ""}\n' > "$FX/pr-104.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'docs PR #104 is CLOSED at' "$FX/run.log" \
+  && grep -qF 'not OPEN at the pushed commit' "$FX/run.log"; then
+  report "dr27. the docs PR is not open after the push: red, named" 0
+else
+  report "dr27. the docs PR is not open after the push: red, named" 1 "$(dr_detail)"
+fi
+
+# dr28. The PR token is missing: red, before anything is pushed.
+dr_case dr28 other plain
+DR_PR_TOKEN=
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'AGENT_PR_TOKEN is not set' "$FX/run.log" && ! pushed_to_fork \
+  && ! fork_has docs/delivery-pr-24; then
+  report "dr28. a missing token: red, named, nothing pushed" 0
+else
+  report "dr28. a missing token: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr29. Qodo's review names other content (stale) on every poll: the run is red after the polls, names the stale
+# state and the exit code, and nothing is pushed or opened (the workflow is stricter than the skill's B4 warning).
+dr_case dr29 other plain
+fx_qodo_clear "$BASE"
+DR_POLLS=2
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'did not settle after 2 polls: stale' "$FX/run.log" \
+  && grep -qF 'scripts/qodo-status.sh exit 3' "$FX/run.log" && ! pushed_to_fork && ! fork_has docs/delivery-pr-24 \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr29. Qodo's review stays stale: red after the polls, named (exit 3), nothing pushed" 0
+else
+  report "dr29. Qodo's review stays stale: red after the polls, named (exit 3), nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr30. Qodo has no review of the head on every poll: red after the polls, named (exit 4), nothing pushed.
+dr_case dr30 other plain
+fx_qodo_none
+DR_POLLS=2
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'did not settle after 2 polls: no review' "$FX/run.log" \
+  && grep -qF 'scripts/qodo-status.sh exit 4' "$FX/run.log" && ! pushed_to_fork \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr30. no Qodo review on every poll: red after the polls, named (exit 4), nothing pushed" 0
+else
+  report "dr30. no Qodo review on every poll: red after the polls, named (exit 4), nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr43. A stale review on the first poll that settles on the second: the run waits and continues, and the doc
+# records no open findings (no Limitations line for qodo-open).
+dr_case dr43 other plain
+fx_qodo_clear "$BASE"
+cp "$FX/comments-null.json" "$FX/comments-poll-1.json"
+fx_qodo_clear "$(head_sha)"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && ! grep -qF 'qodo-open is' "$FX/body-pr-create.md" && ! grep -qF '::warning::' "$FX/run.log"; then
+  report "dr43. a stale Qodo review on the first poll, settled on the second: the run continues" 0
+else
+  report "dr43. a stale Qodo review on the first poll, settled on the second: the run continues" 1 "$(dr_detail)"
+fi
+
+# dr31. Qodo lists two open findings on the head: the run continues, warns, and names the count in the Limitations.
+dr_case dr31 other plain
+review_body "$(head_sha)" medium 'u-1|First finding|🐞 Bug' 'u-2|Second finding|🐞 Bug' > "$FX/r.md"
+fx_qodo "$FX/r.md"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF '::warning::' "$FX/run.log" && grep -qF 'qodo-open is 2.' "$FX/body-pr-create.md" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log"; then
+  report "dr31. two open findings: a warning, qodo-open 2 in the Limitations, the PR opened" 0
+else
+  report "dr31. two open findings: a warning, qodo-open 2 in the Limitations, the PR opened" 1 "$(dr_detail)"
+fi
+
+# dr32. Tokens: each gh call sees the read token except the PR writes (pr create, pr edit), which see the PR
+# token; the build sees neither PAT.
+dr_case dr32 other plain
+dr_run
+if [ "$DR_RC" -eq 0 ] && token_ok && [ -e "$FX/build-env.log" ] && [ ! -s "$FX/build-env.log" ]; then
+  report "dr32. the PR token only on pr create and pr edit; neither PAT in the builds" 0
+else
+  report "dr32. the PR token only on pr create and pr edit; neither PAT in the builds" 1 "$(dr_detail); builds: $(cat "$FX/build-env.log" 2>/dev/null)"
+fi
+
+# dr33. The workflow's SERVE_HOST=0.0.0.0 reaches the head build's preview server (a homepage change, so a
+# screenshot is taken).
+dr_case dr33 home plain
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF -- '--bind 0.0.0.0' "$FX/python3.log"; then
+  report "dr33. SERVE_HOST=0.0.0.0 binds the preview server to every interface" 0
+else
+  report "dr33. SERVE_HOST=0.0.0.0 binds the preview server to every interface" 1 "$(dr_detail); python3: $(cat "$FX/python3.log" 2>/dev/null)"
+fi
+
+# dr34. The generator without SERVE_HOST binds the preview server to 127.0.0.1.
+pr_case dr34 home plain
+fx_qodo_clear "$(head_sha)"
+unset SERVE_HOST
+gen "$CASE"
+if [ "$GEN_RC" -eq 0 ] && grep -qF -- '--bind 127.0.0.1' "$FX/python3.log"; then
+  report "dr34. the generator's default bind is 127.0.0.1" 0
+else
+  report "dr34. the generator's default bind is 127.0.0.1" 1 "rc $GEN_RC: $(tail -n 2 "$FX/gen.log" | tr '\n' ' ')"
+fi
+
+# dr35. A SERVE_HOST that is neither 127.0.0.1 nor 0.0.0.0 stops the generator before it reads anything.
+pr_case dr35 home plain
+fx_qodo_clear "$(head_sha)"
+export SERVE_HOST=1.2.3.4
+gen "$CASE"
+unset SERVE_HOST
+if [ "$GEN_RC" -ne 0 ] && grep -qF 'SERVE_HOST must be 127.0.0.1 or 0.0.0.0' "$FX/gen.log"; then
+  report "dr35. SERVE_HOST other than 127.0.0.1 or 0.0.0.0 dies with its message" 0
+else
+  report "dr35. SERVE_HOST other than 127.0.0.1 or 0.0.0.0 dies with its message" 1 "rc $GEN_RC: $(tail -n 2 "$FX/gen.log" | tr '\n' ' ')"
+fi
+
+# dr36. A manual run for a merged PR with no docs PR open: the same as a push, with the PR number given.
+dr_case dr36 other plain
+DR_EVENT=workflow_dispatch
+DR_PR=24
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr36. a manual run for a merged PR opens the docs PR" 0
+else
+  report "dr36. a manual run for a merged PR opens the docs PR" 1 "$(dr_detail)"
+fi
+
+# dr37. The fork already has docs/delivery-pr-24 from an earlier run (its PR failed, or a closed docs PR left
+# it): the push replaces that branch under a lease on the SHA the fork had, and the docs PR is opened.
+dr_case dr37 other plain
+dr_scratch
+git -C "$W" checkout -q -b docs/delivery-pr-24 "$BASE"
+printf 'an earlier run\n' > "$W/deliveries/2026-11-04-earlier.md"
+git -C "$W" add -A
+dr_commit -m "an earlier run's commit"
+old_sha=$(git -C "$W" rev-parse HEAD)
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-24:refs/heads/docs/delivery-pr-24"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF -- "--force-with-lease=refs/heads/docs/delivery-pr-24:$old_sha" "$FX/git.log" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && grep -qF -- 'pr create --repo lioramilbaum/lioramilbaum.github.io --base main --head lmilbaum:docs/delivery-pr-24' "$FX/gh-calls.log" \
+  && [ "$(git -C "$DR_FORK" log -1 --format=%s refs/heads/docs/delivery-pr-24)" = 'docs: add the delivery doc for PR #24' ] \
+  && token_ok; then
+  report "dr37. the fork already has the branch: replaced under a lease on its SHA, the docs PR opened" 0
+else
+  report "dr37. the fork already has the branch: replaced under a lease on its SHA, the docs PR opened" 1 "$(dr_detail)"
+fi
+
+# dr38. The fork can be read but not written (read-only): the branch is read, the push fails, the run is red,
+# names the push, and opens no PR.
+dr_case dr38 other plain
+chmod -R a-w "$DR_FORK"
+dr_run
+chmod -R u+w "$DR_FORK"
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not push docs/delivery-pr-24 to the fork' "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr38. the push to a read-only fork fails: red, named, no PR opened" 0
+else
+  report "dr38. the push to a read-only fork fails: red, named, no PR opened" 1 "$(dr_detail)"
+fi
+
+# dr39. The askpass script answers git's two prompts for the push: the username x-access-token, and the fork
+# token as the password. The git wrapper asks the script as git does, and askpass.log records the answers.
+dr_case dr39 other plain
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qxF 'user=x-access-token pass=FORK-TOKEN' "$FX/askpass.log"; then
+  report "dr39. the askpass script gives the push x-access-token and the fork token" 0
+else
+  report "dr39. the askpass script gives the push x-access-token and the fork token" 1 "$(dr_detail); askpass: $(cat "$FX/askpass.log" 2>/dev/null)"
+fi
+
+# dr40. A merge commit whose subject names no PR, and which the lookup does not list (every try empty): red, naming
+# the commit, and nothing is pushed. (The merge is of a side branch; its subject is git's default.)
+dr_case dr40 other plain
+h=$(head_sha)
+git -C "$CASE" -c user.name=test -c user.email=t@example.invalid checkout -q -b side "$BASE"
+printf 'side\n' > "$CASE/side.txt"
+git -C "$CASE" add side.txt
+git -C "$CASE" -c user.name=test -c user.email=t@example.invalid commit -q -m "a side change"
+git -C "$CASE" -c user.name=test -c user.email=t@example.invalid checkout -q --detach "$h"
+git -C "$CASE" -c user.name=test -c user.email=t@example.invalid merge -q --no-ff side -m "Merge branch 'side'"
+merge_sha=$(head_sha)
+echo '[]' > "$FX/pulls.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "no merged PR is listed for commit $merge_sha, and it is a merge commit whose subject names no PR" "$FX/run.log" \
+  && ! pushed_to_fork && ! grep -qF 'skipped:' "$FX/run.log"; then
+  report "dr40. a merge commit whose subject names no PR, with no PR found after the tries: red, names the commit" 0
+else
+  report "dr40. a merge commit whose subject names no PR, with no PR found after the tries: red, names the commit" 1 "$(dr_detail)"
+fi
+
+# dr41. A squash commit whose subject names PR #31, which the lookup does not list. PR 31 is merged into main with
+# this commit, so the run reads it, continues with PR #31, and makes its doc and the docs PR.
+new_case dr41
+printf 'a squash\n' > "$CASE/squash.txt"
+commit_all "Add the thing (#31)"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+jq -n --arg base "$BASE" --arg head "$(head_sha)" --rawfile body "$FX/body.md" '{state: "MERGED", baseRefName: "main", title: "Demo change", createdAt: "2026-11-05T09:00:00Z", mergedAt: "2026-11-06T00:00:00Z", headRefName: "feat/demo-change", headRefOid: $head, baseRefOid: $base, url: "https://github.com/lioramilbaum/lioramilbaum.github.io/pull/31", body: $body}' > "$FX/pr-31.json"
+jq -n --arg sha "$(head_sha)" '{merged_at: "2026-11-06T00:00:00Z", merge_commit_sha: $sha, base: {ref: "main"}, user: {login: "someone"}}' > "$FX/pull-31.json"
+git -C "$CASE" push -q "$DR_UP" HEAD:refs/pull/31/head
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF 'continuing with PR #31' "$FX/run.log" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && grep -qF -- 'pr create' "$FX/gh-calls.log" && grep -qF "$doc_name is current" "$FX/run.log"; then
+  report "dr41. a squash commit naming PR #31, which is merged with it: the run continues and makes PR #31's doc" 0
+else
+  report "dr41. a squash commit naming PR #31, which is merged with it: the run continues and makes PR #31's doc" 1 "$(dr_detail)"
+fi
+
+# dr48. A squash commit naming PR #31, which is not merged (merged_at null): a direct push, skipped, and the reason names
+# PR #31.
+new_case dr48
+printf 'a squash\n' > "$CASE/squash.txt"
+commit_all "Add the thing (#31)"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+printf '{"merged_at": null, "merge_commit_sha": "%s", "base": {"ref": "main"}, "user": {"login": "someone"}}\n' "$(head_sha)" > "$FX/pull-31.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: no merged PR has merge commit' "$FX/run.log" \
+  && grep -qF 'PR #31, which its subject names, is not merged into main with this commit' "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
+  report "dr48. a subject naming PR #31, which is not merged with the commit: skipped as a direct push, the reason logged" 0
+else
+  report "dr48. a subject naming PR #31, which is not merged with the commit: skipped as a direct push, the reason logged" 1 "$(dr_detail)"
+fi
+
+# dr49. A subject naming PR #31 that does not exist (a 404): skipped as a direct push, the reason logged.
+new_case dr49
+printf 'a squash\n' > "$CASE/squash.txt"
+commit_all "Add the thing (#31)"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+touch "$FX/pull-31.404"
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'PR #31, which its subject names, does not exist' "$FX/run.log" \
+  && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
+  report "dr49. a subject naming PR #31 that does not exist: skipped as a direct push, the reason logged" 0
+else
+  report "dr49. a subject naming PR #31 that does not exist: skipped as a direct push, the reason logged" 1 "$(dr_detail)"
+fi
+
+# dr50. Reading the PR named by the subject fails with another error (HTTP 500): red, naming PR #31 and the error.
+new_case dr50
+printf 'a squash\n' > "$CASE/squash.txt"
+commit_all "Add the thing (#31)"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+touch "$FX/pull-31.500"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read PR #31, which the subject of' "$FX/run.log" && grep -qF 'HTTP 500' "$FX/run.log" \
+  && ! pushed_to_fork; then
+  report "dr50. reading the PR a subject names fails (HTTP 500): red, naming PR #31 and the error" 0
+else
+  report "dr50. reading the PR a subject names fails (HTTP 500): red, naming PR #31 and the error" 1 "$(dr_detail)"
+fi
+
+# dr42. gh lists 1000 open PRs, the most one call returns, so a docs PR could be past the list: red, named.
+dr_case dr42 other plain
+jq -n '[range(1000) | {number: ., headRefName: "feat/other", headRepositoryOwner: {login: "someone"}, files: []}]' > "$FX/prlist.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "reached gh's limit (1000)" "$FX/run.log" && grep -qF -- '--limit 1000' "$FX/gh-calls.log" \
+  && ! pushed_to_fork; then
+  report "dr42. the open PRs list reaches the 1000 limit: red, named, nothing pushed" 0
+else
+  report "dr42. the open PRs list reaches the 1000 limit: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr44. The PR re-read after the push sees the head from before it once, then the pushed head: the run passes.
+dr_case dr44 other plain
+printf '{"state": "OPEN", "headRefOid": "1111111111111111111111111111111111111111", "body": ""}\n' > "$FX/pr-104-view-1.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && [ "$(grep -cF 'pr view 104' "$FX/gh-calls.log")" = 2 ]; then
+  report "dr44. the PR re-read sees the old head once, then the pushed one: the run passes" 0
+else
+  report "dr44. the PR re-read sees the old head once, then the pushed one: the run passes" 1 "$(dr_detail)"
+fi
+
+# dr45. A retry after a push that went through and whose title edit failed: the branch is byte-identical, and the
+# retry still writes the title (for both PRs) and the body, keeping the notes.
+dr_case dr45 other plain
+gen "$CASE"
+gen_ok=$GEN_RC
+cp "$CASE/$doc_name" "$FX/doc24.md"
+rm -rf "$CASE/$doc_name" "$CASE/deliveries/$stem"
+dr_doc23 docs/delivery-pr-23
+cp "$FX/doc24.md" "$W/$doc_name"
+git -C "$W" add -A
+dr_commit --amend -m "docs: add the delivery docs for PRs #23 and #24"
+git -C "$W" push -q -f "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+FORK_SHA=$(git -C "$W" rev-parse HEAD)
+git -C "$CASE" fetch -q "$W" "+refs/heads/docs/delivery-pr-23:refs/scratch/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 "$FORK_SHA"
+dr_run
+if [ "$gen_ok" -eq 0 ] && [ "$DR_RC" -eq 0 ] && grep -qF 'no change: the doc for PR #24' "$FX/run.log" \
+  && ! pushed_to_fork \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --title docs: add the delivery docs for PRs #23 and #24 --body-file' "$FX/gh-calls.log" \
+  && grep -qF 'Kept note: the screenshot point was fair.' "$FX/body-pr-edit.md" && token_ok; then
+  report "dr45. a byte-identical retry still writes the title and body (the earlier edit failed)" 0
+else
+  report "dr45. a byte-identical retry still writes the title and body (the earlier edit failed)" 1 "gen $gen_ok; $(dr_detail)"
+fi
+
+# dr46. qodo-status settles on the head's clear review (the first comments read), but the generator's read finds
+# no Qodo comment, so it records qodo-open none. The run is red, names the disagreement, and nothing is pushed.
+dr_case dr46 other plain
+fx_qodo_clear "$(head_sha)"
+cp "$FX/comments-null.json" "$FX/comments-poll-1.json"
+fx_qodo_none
+dr_run
+if [ "$DR_RC" -ne 0 ] \
+  && grep -qF "error: the generator recorded qodo-open=none for $doc_name, but scripts/qodo-status.sh called Qodo's review settled" "$FX/run.log" \
+  && ! pushed_to_fork && ! fork_has docs/delivery-pr-24 && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr46. the status settles but the generator records qodo-open none: red, named, nothing pushed" 0
+else
+  report "dr46. the status settles but the generator records qodo-open none: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr47. The same disagreement with the generator reading the base commit's review (other): red, named, nothing pushed.
+dr_case dr47 other plain
+fx_qodo_clear "$(head_sha)"
+cp "$FX/comments-null.json" "$FX/comments-poll-1.json"
+fx_qodo_clear "$BASE"
+dr_run
+if [ "$DR_RC" -ne 0 ] \
+  && grep -qF "error: the generator recorded qodo-open=other for $doc_name, but scripts/qodo-status.sh called Qodo's review settled" "$FX/run.log" \
+  && ! pushed_to_fork && ! fork_has docs/delivery-pr-24 && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr47. the status settles but the generator records qodo-open other: red, named, nothing pushed" 0
+else
+  report "dr47. the status settles but the generator records qodo-open other: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr51. The only open docs PR for PR 23 targets another branch (release), not main: the run does not reuse it, and
+# starts a new docs branch for PR 24. (Fails without the baseRefName filter: the run would edit PR 103.)
+dr_case dr51 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+sed 's/"baseRefName": "main"/"baseRefName": "release"/' "$FX/prlist.json" > "$FX/prlist.tmp" && mv "$FX/prlist.tmp" "$FX/prlist.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF -- '--head lmilbaum:docs/delivery-pr-24' "$FX/gh-calls.log" \
+  && ! grep -qF -- 'pr edit 103' "$FX/gh-calls.log" && ! grep -qF 'refs/delivery/reuse' "$FX/git.log"; then
+  report "dr51. a docs PR that targets another branch is not reused: a new docs branch for PR 24" 0
+else
+  report "dr51. a docs PR that targets another branch is not reused: a new docs branch for PR 24" 1 "$(dr_detail)"
+fi
+
+# dr52. AGENT_FORK_TOKEN is missing: red, before anything is read or pushed.
+dr_case dr52 other plain
+DR_FORK_TOKEN=
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'AGENT_FORK_TOKEN is not set' "$FX/run.log" && ! pushed_to_fork && [ ! -s "$FX/gh-calls.log" ]; then
+  report "dr52. AGENT_FORK_TOKEN is missing: red, named, nothing read or pushed" 0
+else
+  report "dr52. AGENT_FORK_TOKEN is missing: red, named, nothing read or pushed" 1 "$(dr_detail)"
+fi
+
+# dr53. GH_TOKEN (the read token) is missing: red, before anything is read or pushed.
+dr_case dr53 other plain
+DR_READ_TOKEN=
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'GH_TOKEN is not set' "$FX/run.log" && ! pushed_to_fork && [ ! -s "$FX/gh-calls.log" ]; then
+  report "dr53. GH_TOKEN is missing: red, named, nothing read or pushed" 0
+else
+  report "dr53. GH_TOKEN is missing: red, named, nothing read or pushed" 1 "$(dr_detail)"
+fi
+
+# dr54. A --sha that is not a commit SHA: red, named.
+dr_case dr54 other plain
+DR_SHA=not-a-sha
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF -- '--sha must be a commit SHA' "$FX/run.log" && [ ! -s "$FX/gh-calls.log" ]; then
+  report "dr54. a --sha that is not a commit SHA: red, named, no GitHub call" 0
+else
+  report "dr54. a --sha that is not a commit SHA: red, named, no GitHub call" 1 "$(dr_detail)"
+fi
+
+# dr55. A manual dispatch whose --pr is not a number: red, named.
+dr_case dr55 other plain
+DR_EVENT=workflow_dispatch
+DR_PR=abc
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "a manual run needs --pr N (a PR number), not 'abc'" "$FX/run.log" && ! pushed_to_fork; then
+  report "dr55. a manual dispatch with a non-numeric --pr: red, named" 0
+else
+  report "dr55. a manual dispatch with a non-numeric --pr: red, named" 1 "$(dr_detail)"
+fi
+
+# dr56. gh cannot read the merged PR's state: red, naming PR 24.
+dr_case dr56 other plain
+touch "$FX/pr-24.fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read PR #24' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr56. gh cannot read PR #24: red, named, nothing pushed" 0
+else
+  report "dr56. gh cannot read PR #24: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr57. gh cannot read PR 24's author: red, named.
+dr_case dr57 other plain
+touch "$FX/gh-fail-pulls"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read the author of PR #24' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr57. gh cannot read PR #24's author: red, named, nothing pushed" 0
+else
+  report "dr57. gh cannot read PR #24's author: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr58. The origin cannot be fetched (its main is gone): red, named, nothing pushed.
+dr_case dr58 other plain
+rm -rf "$DR_UP"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not fetch main from origin' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr58. the origin cannot be fetched: red, named, nothing pushed" 0
+else
+  report "dr58. the origin cannot be fetched: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr59. The origin has no refs/pull/24/head (the PR's ref is gone): red, naming the PR's head fetch.
+dr_case dr59 other plain
+git -C "$DR_UP" update-ref -d refs/pull/24/head
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not fetch PR #24's head from origin" "$FX/run.log" && ! pushed_to_fork; then
+  report "dr59. the origin has no PR head ref: red, named, nothing pushed" 0
+else
+  report "dr59. the origin has no PR head ref: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr60. gh cannot list the open PRs: red, named.
+dr_case dr60 other plain
+touch "$FX/gh-fail-pr-list"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not list the open PRs' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr60. gh cannot list the open PRs: red, named, nothing pushed" 0
+else
+  report "dr60. gh cannot list the open PRs: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr61. A docs PR whose branch name git does not accept: red, named.
+dr_case dr61 other plain
+printf '[{"number": 103, "headRefName": "docs/delivery-bad..name", "headRepositoryOwner": {"login": "lmilbaum"}, "baseRefName": "main", "files": [{"path": "deliveries/a.md"}]}]\n' > "$FX/prlist.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "is not a valid branch name" "$FX/run.log" && ! pushed_to_fork; then
+  report "dr61. a docs PR with an invalid branch name: red, named" 0
+else
+  report "dr61. a docs PR with an invalid branch name: red, named" 1 "$(dr_detail)"
+fi
+
+# dr62. The docs PR's branch cannot be fetched from the fork: red, named.
+dr_case dr62 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+DR_FORK="$tmp/no-such-fork-62.git"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not fetch docs/delivery-pr-23 from the fork' "$FX/run.log" && ! grep -qF -- ' push ' "$FX/git.log"; then
+  report "dr62. the reused docs branch cannot be fetched from the fork: red, named, nothing pushed" 0
+else
+  report "dr62. the reused docs branch cannot be fetched from the fork: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr63. The reused docs branch's one commit changes no file (an empty commit): red, named.
+dr_case dr63 other plain
+dr_scratch
+git -C "$W" checkout -q -b docs/delivery-pr-23 "$BASE"
+dr_commit --allow-empty -m "an empty commit"
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "docs PR #103's commit changes no files" "$FX/run.log" && ! pushed_to_fork; then
+  report "dr63. a reused docs branch whose commit changes no file: red, named, nothing pushed" 0
+else
+  report "dr63. a reused docs branch whose commit changes no file: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr64. A doc on the reused branch has no **PR:** line to name its PR: red, named, nothing pushed.
+dr_case dr64 other plain
+dr_scratch
+git -C "$W" checkout -q -b docs/delivery-pr-23 "$BASE"
+printf 'no header here\n' > "$W/deliveries/2026-11-04-p23.md"
+git -C "$W" add -A
+dr_commit -m "a doc without a header"
+git -C "$W" push -q "$DR_FORK" "docs/delivery-pr-23:refs/heads/docs/delivery-pr-23"
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'has no' "$FX/run.log" && grep -qF "to name its PR" "$FX/run.log" && ! pushed_to_fork; then
+  report "dr64. a doc on the reused branch with no PR line: red, named, nothing pushed" 0
+else
+  report "dr64. a doc on the reused branch with no PR line: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr65. The reused docs PR cannot be read after the push (its body): red, naming it.
+dr_case dr65 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+touch "$FX/pr-103.fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read docs PR #103' "$FX/run.log"; then
+  report "dr65. the reused docs PR cannot be read: red, named" 0
+else
+  report "dr65. the reused docs PR cannot be read: red, named" 1 "$(dr_detail)"
+fi
+
+# dr66. The reused docs PR's title and body edit fails: red, named.
+dr_case dr66 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+touch "$FX/gh-fail-pr-edit"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not update the title and body of docs PR #103' "$FX/run.log"; then
+  report "dr66. the reused docs PR's title and body edit fails: red, named" 0
+else
+  report "dr66. the reused docs PR's title and body edit fails: red, named" 1 "$(dr_detail)"
+fi
+
+# dr67. gh pr create prints no PR URL: red, named.
+dr_case dr67 other plain
+echo 'not a url' > "$FX/pr-create-out.txt"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'gh pr create printed no PR URL' "$FX/run.log"; then
+  report "dr67. gh pr create prints no PR URL: red, named" 0
+else
+  report "dr67. gh pr create prints no PR URL: red, named" 1 "$(dr_detail)"
+fi
+
+# dr68. The docs PR cannot be read in the re-read after the push: red, named.
+dr_case dr68 other plain
+touch "$FX/pr-104.fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read docs PR #104' "$FX/run.log"; then
+  report "dr68. the docs PR cannot be re-read after the push: red, named" 0
+else
+  report "dr68. the docs PR cannot be re-read after the push: red, named" 1 "$(dr_detail)"
+fi
+
+# dr69. The fork can be read but not written, and a docs branch exists: the lease push fails, red, named.
+dr_case dr69 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+chmod -R a-w "$DR_FORK"
+dr_run
+chmod -R u+w "$DR_FORK"
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not push docs/delivery-pr-23 to the fork' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr69. the reused docs branch cannot be pushed (read-only fork): red, named, no PR edit" 0
+else
+  report "dr69. the reused docs branch cannot be pushed (read-only fork): red, named, no PR edit" 1 "$(dr_detail)"
+fi
+
+# dr70. The commit lookup is empty, the commit is not in the clone, and it cannot be fetched from origin: red, naming
+# the commit, because whether it is a merge is then unknown.
+dr_case dr70 other plain
+echo '[]' > "$FX/pulls.json"
+DR_SHA=0000000000000000000000000000000000000001
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not be fetched to check whether it is a merge' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr70. a direct-push commit that cannot be fetched to check: red, named" 0
+else
+  report "dr70. a direct-push commit that cannot be fetched to check: red, named" 1 "$(dr_detail)"
+fi
+
+# dr71. A rebase merge: one parent, a subject that names no PR, and no PR listed for it by the commit lookup. The
+# recently merged PRs list PR 32 with this commit as its merge commit, so the commit is found by merge commit: the
+# run continues with PR 32 and makes its doc and the docs PR.
+new_case dr71
+printf 'a rebased change\n' > "$CASE/rebased.txt"
+commit_all "a rebased change"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+jq -n --arg base "$BASE" --arg head "$(head_sha)" --rawfile body "$FX/body.md" '{state: "MERGED", baseRefName: "main", title: "Demo change", createdAt: "2026-11-05T09:00:00Z", mergedAt: "2026-11-06T00:00:00Z", headRefName: "feat/demo-change", headRefOid: $head, baseRefOid: $base, url: "https://github.com/lioramilbaum/lioramilbaum.github.io/pull/32", body: $body}' > "$FX/pr-32.json"
+jq -n --arg sha "$(head_sha)" '{data: {repository: {pullRequests: {nodes: [{number: 32, mergeCommit: {oid: $sha}}, {number: 31, mergeCommit: {oid: "1111111111111111111111111111111111111111"}}]}}}}' > "$FX/merged-prs.json"
+git -C "$CASE" push -q "$DR_UP" HEAD:refs/pull/32/head
+h71=$(head_sha)
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF "found by merge commit: PR #32 has $h71 as its merge commit" "$FX/run.log" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr71. a rebase merge the commit lookup misses, found by the recently merged PRs: the doc is made" 0
+else
+  report "dr71. a rebase merge the commit lookup misses, found by the recently merged PRs: the doc is made" 1 "$(dr_detail)"
+fi
+
+# dr72. The same kind of commit, with no merged PR listed for it by either the lookup or the recently merged PRs: a
+# direct push, skipped, and the log says no merged PR has this merge commit.
+new_case dr72
+printf 'a rebased change\n' > "$CASE/rebased.txt"
+commit_all "a rebased change"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF "skipped: no merged PR has merge commit $(head_sha) (a direct push)" "$FX/run.log" \
+  && grep -qF -- 'pullRequests' "$FX/gh-calls.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr72. a commit no PR is listed for, by either list: skipped as a direct push, the log says so" 0
+else
+  report "dr72. a commit no PR is listed for, by either list: skipped as a direct push, the log says so" 1 "$(dr_detail)"
+fi
+
+# dr73. The recently merged PRs cannot be listed: red, naming the lookup, nothing pushed.
+new_case dr73
+printf 'a rebased change\n' > "$CASE/rebased.txt"
+commit_all "a rebased change"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+touch "$FX/merged-prs.fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not list the recently merged PRs to find the PR of commit' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr73. the recently merged PRs cannot be listed: red, named, nothing pushed" 0
+else
+  report "dr73. the recently merged PRs cannot be listed: red, named, nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr74. Two recently merged PRs have this commit as their merge commit: red, naming both.
+new_case dr74
+printf 'a rebased change\n' > "$CASE/rebased.txt"
+commit_all "a rebased change"
+body_plain > "$FX/body.md"
+dr_finish
+echo '[]' > "$FX/pulls.json"
+jq -n --arg sha "$(head_sha)" '{data: {repository: {pullRequests: {nodes: [{number: 32, mergeCommit: {oid: $sha}}, {number: 33, mergeCommit: {oid: $sha}}]}}}}' > "$FX/merged-prs.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF '2 merged PRs have merge commit' "$FX/run.log" && ! pushed_to_fork; then
+  report "dr74. two recently merged PRs with this merge commit: red, named" 0
+else
+  report "dr74. two recently merged PRs with this merge commit: red, named" 1 "$(dr_detail)"
+fi
+
+# dr75. A manual dispatch for a PR merged into release, not main: red, naming the base, and nothing is written.
+dr_case dr75 other plain
+jq '.baseRefName = "release"' "$FX/pr.json" > "$FX/pr.tmp" && mv "$FX/pr.tmp" "$FX/pr.json"
+DR_EVENT=workflow_dispatch
+DR_PR=24
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF 'PR #24 merged into release, not main' "$FX/run.log" && no_writes; then
+  report "dr75. a manual dispatch for a PR merged into release: red, naming the base, no write, no push" 0
+else
+  report "dr75. a manual dispatch for a PR merged into release: red, naming the base, no write, no push" 1 "$(dr_detail)"
+fi
+
+# dr76. The doc is already on main, and Qodo's review would still be waiting (its comment was edited a minute ago).
+# The run skips at once with no Qodo poll and no write. Checked after the wait, the run would poll and then fail.
+dr_case dr76 other plain
+h24=$(head_sha)
+gen "$CASE"
+gen_ok=$GEN_RC
+commit_all "the delivery doc for PR 24, on main"
+git -C "$CASE" push -q -f "$DR_UP" HEAD:refs/heads/main
+DR_SHA=$h24
+fx_qodo_clear "$h24"
+fx_qodo_edited_at 2026-11-06T11:59:00Z
+DR_POLLS=2
+dr_run
+if [ "$gen_ok" -eq 0 ] && [ "$DR_RC" -eq 0 ] && grep -qF "skipped: $doc_name is already on main" "$FX/run.log" \
+  && ! grep -qF 'comments(first' "$FX/gh-calls.log" && no_writes; then
+  report "dr76. already on main while Qodo's review would wait: skipped at once, no Qodo poll, no write" 0
+else
+  report "dr76. already on main while Qodo's review would wait: skipped at once, no Qodo poll, no write" 1 "gen $gen_ok; $(dr_detail)"
+fi
+
+# dr77. The doc is not on main at the first check, and merges to main while the run waits for Qodo's review: a hook
+# pushes the doc's commit to the origin's main at the review's read. The run fetches main again after the wait,
+# finds the doc, and skips: nothing is written or pushed, and no replacement is proposed. Without the second check,
+# the run would make a replacement for the existing doc.
+dr_case dr77 other plain
+h24=$(head_sha)
+gen "$CASE"
+gen_ok=$GEN_RC
+commit_all "the delivery doc for PR 24, merged while the run waits"
+c2=$(head_sha)
+printf '#!/usr/bin/env bash\n%s -C %s push -q -f %s %s:refs/heads/main\n' "$real_git" "$CASE" "$DR_UP" "$c2" > "$FX/on-comments-read"
+chmod +x "$FX/on-comments-read"
+DR_SHA=$h24
+dr_run
+if [ "$gen_ok" -eq 0 ] && [ "$DR_RC" -eq 0 ] \
+  && grep -qF "skipped: $doc_name is already on main (it merged while this run waited for Qodo)" "$FX/run.log" \
+  && grep -qF 'comments(first' "$FX/gh-calls.log" && no_writes; then
+  report "dr77. the doc merges to main while the run waits for Qodo: skipped after the second check, no write" 0
+else
+  report "dr77. the doc merges to main while the run waits for Qodo: skipped after the second check, no write" 1 "gen $gen_ok; $(dr_detail)"
 fi
 
 if [ "$failures" -ne 0 ]; then
