@@ -10,11 +10,14 @@
 #
 # Usage: scripts/delivery-run.sh --event push|workflow_dispatch --sha SHA [--pr N]
 #   --pr N  the PR to generate for. A manual run needs it; a push finds its PR from its commit.
-# Environment: GH_TOKEN is the read token, for every gh call but the two PR writes.
-# AGENT_FORK_TOKEN (contents write on the owner's fork) pushes the docs branch. AGENT_PR_TOKEN
-# (pull requests and issues write upstream) opens and edits the docs PR, so CI runs on it. The two
-# tokens are copied into shell variables and removed from the environment before the script runs any
-# script, git command or build, so none of them inherits them. The script's first lines (the cd through
+# Environment: GH_TOKEN is the read token, for every gh call but the PR writes.
+# AGENT_FORK_TOKEN (contents and workflows write on the owner's fork) pushes the docs branch, and fast-forwards the
+# fork's main to upstream's before that push, with a plain git push (sync_fork_main; AGENTS.md Setup). The Workflows
+# permission is needed because GitHub refuses a token push that adds or changes workflow files without it. The sync
+# runs on the push path only, after every skip, so a skipped run makes no write. AGENT_PR_TOKEN (pull requests and
+# issues write upstream) opens and edits the docs PR, so CI runs on it.
+# The two tokens are copied into shell variables and removed from the environment before the
+# script runs any script, git command or build, so none of them inherits them. The script's first lines (the cd through
 # dirname) run before the removal and see the tokens, and code
 # running as the same user could read them from /proc. Every script this run executes is code already
 # merged to main, trusted as much as this script, since a merged change could change any of them. git
@@ -187,6 +190,49 @@ push_branch() {
     "$fork_url" "HEAD:refs/heads/$branch"
 }
 
+# push_fork_main UP: pushes UP to the fork's main as a plain, non-force push, which GitHub accepts only as a
+# fast-forward. No lease: --force-with-lease allows a non-fast-forward update when the lease matches, so it would
+# force. The fork token reaches git through the askpass script, as in push_branch: a prefix assignment on this
+# command only, never in an argument, a URL or a config.
+push_fork_main() {
+  DELIVERY_FORK_TOKEN="$fork_token" GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    git -c core.hooksPath=/dev/null -c core.fsmonitor=false push --quiet "$fork_url" "$1:refs/heads/main"
+}
+
+# sync_fork_main: makes the fork's main equal to upstream's main before the docs branch is pushed (AGENTS.md Setup).
+# The branch is based on upstream's main, and GitHub refuses a push to the fork that adds or changes workflow files
+# the fork's main lacks, unless the token has the Workflows permission. Both mains are read with git, with no token.
+# Equal: logged, no write. The fork's main has commits upstream lacks: the run fails and nothing is pushed. Behind:
+# upstream's main is pushed to the fork's main as a fast-forward; the fork's main is then read again and must equal
+# upstream's main. Nothing here forces a ref.
+sync_fork_main() {
+  local up fork ahead fork_now
+  git_run fetch --quiet --no-tags origin "+refs/heads/main:refs/delivery/up-main" 2>"$work/sync-up.err" \
+    || die "could not fetch upstream's main from origin: $(cat "$work/sync-up.err")"
+  git_run fetch --quiet --no-tags "$fork_url" "+refs/heads/main:refs/delivery/fork-main" 2>"$work/sync-fork.err" \
+    || die "could not fetch the fork's main from $fork_url (the fork has no main, or cannot be read): $(cat "$work/sync-fork.err")"
+  up=$(git_run rev-parse --verify --quiet "refs/delivery/up-main^{commit}") || die "could not read upstream's main"
+  fork=$(git_run rev-parse --verify --quiet "refs/delivery/fork-main^{commit}") || die "could not read the fork's main"
+  if [[ "$up" == "$fork" ]]; then
+    echo "fork current: main is $up"
+    return 0
+  fi
+  ahead=$(git_run rev-list --count "$up..$fork" 2>"$work/sync-count.err") \
+    || die "could not compare the fork's main with upstream's: $(cat "$work/sync-count.err")"
+  if (( ahead > 0 )); then
+    die "the fork's main ($fork) has diverged from upstream's ($up): $ahead commit(s) upstream lacks; the run never forces it; nothing is pushed"
+  fi
+  echo "fork behind: $fork -> $up"
+  push_fork_main "$up" 2>"$work/sync-push.err" \
+    || die "could not fast-forward the fork's main to $up: $(cat "$work/sync-push.err"); nothing is pushed"
+  git_run fetch --quiet --no-tags "$fork_url" "+refs/heads/main:refs/delivery/fork-main" 2>"$work/sync-fork2.err" \
+    || die "could not re-read the fork's main after the push: $(cat "$work/sync-fork2.err")"
+  fork_now=$(git_run rev-parse --verify --quiet "refs/delivery/fork-main^{commit}") || die "could not read the fork's main after the push"
+  [[ "$fork_now" == "$up" ]] || die "after the push the fork's main is $fork_now, not upstream's main ($up); nothing is pushed"
+  echo "fork synced: $fork -> $up"
+}
+
 # set_docs: the docs the branch carries (the working tree's deliveries/*.md that main does not have as they
 # are; a doc main lacks is added, a doc the branch removes is not listed), the PRs they name (prs_text) and
 # the commit subject and PR title (subject). Both the new commit and a byte-identical reuse use it.
@@ -266,6 +312,7 @@ main() {
   local verify base_now check_out docs_url pushed_sha dstate dhead head_line body old_body tail_sections
   local open_json open_total open_list open_count docs_pr="" branch reused=no reuse_sha="" rb commits files name stem
   local gen_log tries ls_out fork_now d
+  local -a push_opts=()
   docs=()
   pr_list=""
 
@@ -511,10 +558,9 @@ ASKPASS
     done
     echo "$check_out"
 
-    # The push: the fork's branch, under a lease on the commit this run started from.
+    # The push's options: the fork's branch, under a lease on the commit this run started from.
     if [[ "$reused" == yes ]]; then
-      push_branch "--force-with-lease=refs/heads/$branch:$reuse_sha" \
-        || die "could not push $branch to the fork; nothing is opened"
+      push_opts=("--force-with-lease=refs/heads/$branch:$reuse_sha")
     else
       # A new branch, unless the fork already has one: an earlier run of this workflow pushed it and then its PR
       # step failed, or its docs PR was closed unmerged. Then the branch is replaced under a lease on the SHA the
@@ -523,12 +569,14 @@ ASKPASS
       fork_now=${ls_out%%[[:space:]]*}
       if [[ -n "$fork_now" ]]; then
         [[ "$fork_now" =~ ^[0-9a-f]{40}$ ]] || die "the fork's $branch is not a commit: $ls_out"
-        push_branch -u "--force-with-lease=refs/heads/$branch:$fork_now" \
-          || die "could not push $branch to the fork; nothing is opened"
+        push_opts=(-u "--force-with-lease=refs/heads/$branch:$fork_now")
       else
-        push_branch -u || die "could not push $branch to the fork; nothing is opened"
+        push_opts=(-u)
       fi
     fi
+    # The fork's main is synced before the push (AGENTS.md Setup), so the docs branch is pushed onto a current main.
+    sync_fork_main
+    push_branch "${push_opts[@]}" || die "could not push $branch to the fork; nothing is opened"
     pushed_sha=$(git_run rev-parse HEAD) || die "could not read the pushed commit"
   fi
 

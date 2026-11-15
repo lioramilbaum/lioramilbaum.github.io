@@ -252,6 +252,21 @@ if [ -n "${GH_FIXTURES:-}" ]; then
       fi ;;
   esac
 fi
+# fail-git-arg (a fixture's text): a git call whose argv holds the text fails, as a simulated failure of that call.
+if [ -n "${GH_FIXTURES:-}" ] && [ -e "$GH_FIXTURES/fail-git-arg" ]; then
+  case " $* " in
+    *"$(cat "$GH_FIXTURES/fail-git-arg")"*) echo "simulated git failure: $*" >&2; exit 1 ;;
+  esac
+fi
+# before-main-push (a fixture's script, run once before a push of the fork's main): the race cases move a ref
+# between the run's read and its push. The script runs with no fixtures, so its own git calls are not logged.
+if [ -n "${GH_FIXTURES:-}" ] && [ -e "$GH_FIXTURES/before-main-push" ]; then
+  case " $* " in
+    *" push "*":refs/heads/main "*)
+      mv "$GH_FIXTURES/before-main-push" "$GH_FIXTURES/before-main-push.ran"
+      GH_FIXTURES= bash "$GH_FIXTURES/before-main-push.ran" ;;
+  esac
+fi
 exec @REAL@ "$@"
 STUB
 sed "s|@REAL@|$real_python|" > "$bin/python3" <<'STUB'
@@ -2579,11 +2594,12 @@ fi
 # delivery-run.sh (the Delivery doc workflow, AGENTS.md rule 6). Each dr case runs the real script in
 # its clone, with the real generator, qodo-status.sh and check-delivery.sh. The stubs stand in for gh,
 # the builds and the screenshot; git and python3 are logged and then run for real. The clone's origin
-# is a bare repo holding main and the PR's ref at the clone's HEAD; the fork is a bare repo. GH_TOKEN is
-# READ-TOKEN, and the two PATs are FORK-TOKEN and PR-TOKEN: gh-token.log says which one each gh call saw.
+# is a bare repo holding main and the PR's ref at the clone's HEAD; the fork is a bare repo holding main at the
+# same HEAD. GH_TOKEN is READ-TOKEN, and the two PATs are FORK-TOKEN and PR-TOKEN: gh-token.log says
+# which one each gh call saw.
 
-# dr_up: the clone's origin, a bare repo holding main and refs/pull/24/head at the clone's HEAD, and an
-# empty fork, a bare repo. Each call resets both.
+# dr_up: the clone's origin, a bare repo holding main and refs/pull/24/head at the clone's HEAD, and the fork, a
+# bare repo whose main is the same HEAD (so the sync finds it current). Each call resets both.
 dr_up() {
   DR_UP="$CASE-up.git"
   DR_FORK="$CASE-fork.git"
@@ -2593,6 +2609,7 @@ dr_up() {
   git -C "$CASE" remote remove origin 2>/dev/null || true
   git -C "$CASE" remote add origin "$DR_UP"
   git -C "$CASE" push -q -f "$DR_UP" HEAD:refs/heads/main HEAD:refs/pull/24/head
+  git -C "$CASE" push -q "$DR_FORK" HEAD:refs/heads/main
 }
 
 # fx_pulls FILE SHA NUMBER...: the PRs a commit lookup returns, each merged into main at SHA.
@@ -2637,8 +2654,8 @@ dr_case() {
 # dr_run: runs scripts/delivery-run.sh in the case as the workflow runs it: the tokens, SERVE_HOST
 # 0.0.0.0, and the window open at NOW. The DR_* variables override these (an empty value is a missing
 # token): DR_EVENT (push), DR_PR, DR_SHA (the HEAD), DR_NOW, DR_READ_TOKEN, DR_FORK_TOKEN, DR_PR_TOKEN,
-# DR_SERVE_HOST, DR_SLEEP (0), DR_POLLS (40), DR_CHECK (a replacement for check-delivery.sh). Each run's
-# logs start empty. Its output goes to $FX/run.log and its status to DR_RC.
+# DR_SERVE_HOST, DR_SLEEP (0), DR_POLLS (40), DR_CHECK (a replacement for check-delivery.sh). Each
+# run's logs start empty. Its output goes to $FX/run.log and its status to DR_RC.
 dr_run() {
   DR_RC=0
   : > "$FX/gh-calls.log"
@@ -2650,7 +2667,8 @@ dr_run() {
   rm -f "$FX/pulls-calls" "$FX/comments-calls" "$FX"/pr-*-calls
   (cd "$CASE" && env PATH="$bin:$PATH" GH_FIXTURES="$FX" \
     GH_TOKEN="${DR_READ_TOKEN-READ-TOKEN}" AGENT_FORK_TOKEN="${DR_FORK_TOKEN-FORK-TOKEN}" \
-    AGENT_PR_TOKEN="${DR_PR_TOKEN-PR-TOKEN}" SERVE_HOST="${DR_SERVE_HOST-0.0.0.0}" \
+    AGENT_PR_TOKEN="${DR_PR_TOKEN-PR-TOKEN}" \
+    SERVE_HOST="${DR_SERVE_HOST-0.0.0.0}" \
     NOW="${DR_NOW-$NOW}" DELIVERY_SLEEP="${DR_SLEEP-0}" DELIVERY_QODO_POLLS="${DR_POLLS-40}" \
     DELIVERY_FORK_URL="$DR_FORK" BUILD_SITE="$bin/build-site" SNAPSHOT="$bin/snapshot" \
     ${DR_CHECK:+DELIVERY_CHECK="$DR_CHECK"} \
@@ -2731,17 +2749,73 @@ fork_has() { git -C "$DR_FORK" rev-parse -q --verify "refs/heads/$1" >/dev/null 
 # pushed_to_fork: the run's git calls include a push.
 pushed_to_fork() { grep -qF -- ' push ' "$FX/git.log"; }
 
-# no_writes: the run made no PR write (pr edit, pr create) and no push to the fork. A skip path must make neither.
+# dr_fork_behind: the fork's main is the case's base, one commit behind upstream's main (the clone's HEAD), so the
+# push's sync must fast-forward it.
+dr_fork_behind() { git -C "$DR_FORK" update-ref refs/heads/main "$BASE"; }
+
+# fork_main_is SHA: the fork's main is SHA.
+fork_main_is() { [ "$(git -C "$DR_FORK" rev-parse refs/heads/main)" = "$1" ]; }
+
+# main_pushed: the run pushed the fork's main (the sync's push of upstream's main).
+main_pushed() { grep -qE -- ' push .*:refs/heads/main$' "$FX/git.log"; }
+
+# askpass_fork_only N: the run made N pushes, and git's askpass was answered with the fork token for each (the
+# fork token reaches git only through askpass, and only on a push).
+askpass_fork_only() {
+  [ "$(wc -l < "$FX/askpass.log" | tr -d ' ')" = "$1" ] \
+    && [ "$(grep -cxF 'user=x-access-token pass=FORK-TOKEN' "$FX/askpass.log")" = "$1" ]
+}
+
+# no_writes: the run made no PR write (pr edit, pr create) and no push to the fork (of the docs branch or the fork's
+# main). A skip path must make neither.
 no_writes() { ! grep -qF -- 'pr edit' "$FX/gh-calls.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; }
 
-# token_ok: every gh call saw READ-TOKEN, except the PR writes (pr create and pr edit), which saw
-# PR-TOKEN; and the run made at least one PR write.
+# token_ok: every gh call saw READ-TOKEN, except the PR writes (pr create and pr edit), which saw PR-TOKEN; no gh call
+# has a -X method (a write). The run made at least one PR write.
 token_ok() {
   awk '
     { t = $1; $1 = ""; w = ($0 ~ / pr (create|edit) /) }
+    / -X / { bad = 1 }
     w { writes++; if (t != "PR-TOKEN") bad = 1; next }
     { if (t != "READ-TOKEN") bad = 1 }
     END { exit (bad || writes == 0) ? 1 : 0 }' "$FX/gh-token.log"
+}
+
+# dr_fork_refuses_main: the fork refuses a push of its main (a pre-receive hook: a stand-in for GitHub's refusal,
+# not GitHub's wording).
+dr_fork_refuses_main() {
+  cat > "$DR_FORK/hooks/pre-receive" <<'HOOK'
+#!/usr/bin/env bash
+while read -r old new ref; do
+  if [ "$ref" = refs/heads/main ]; then echo "simulated refusal of refs/heads/main" >&2; exit 1; fi
+done
+exit 0
+HOOK
+  chmod +x "$DR_FORK/hooks/pre-receive"
+}
+
+# dr_fork_main_deletes: after the fork accepts a push of its main, the main is deleted (a post-receive hook), so the
+# run's re-read of the fork's main fails.
+dr_fork_main_deletes() {
+  cat > "$DR_FORK/hooks/post-receive" <<HOOK
+#!/usr/bin/env bash
+while read -r old new ref; do
+  if [ "\$ref" = refs/heads/main ]; then git --git-dir='$DR_FORK' update-ref -d refs/heads/main; fi
+done
+HOOK
+  chmod +x "$DR_FORK/hooks/post-receive"
+}
+
+# dr_fork_main_rewinds BASE: after the fork accepts a push of its main, the main goes back to BASE (a post-receive
+# hook), so the run's confirm finds the fork's main unlike upstream's.
+dr_fork_main_rewinds() {
+  cat > "$DR_FORK/hooks/post-receive" <<HOOK
+#!/usr/bin/env bash
+while read -r old new ref; do
+  if [ "\$ref" = refs/heads/main ]; then git --git-dir='$DR_FORK' update-ref refs/heads/main '$1'; fi
+done
+HOOK
+  chmod +x "$DR_FORK/hooks/post-receive"
 }
 
 # dr_detail: a failed case's status and the end of the run's log.
@@ -2834,9 +2908,10 @@ fi
 
 # dr4. A Renovate PR is skipped, and the log says why.
 dr_case dr4 other plain
+dr_fork_behind
 fx_pull closed false 'renovate[bot]'
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: PR #24 is a Renovate PR (exempt, AGENTS.md rule 6)' "$FX/run.log" \
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: PR #24 is a Renovate PR (exempt, AGENTS.md rule 6)' "$FX/run.log" \
   && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
   report "dr4. a Renovate PR is skipped: exit 0, the reason logged, no push and no PR" 0
 else
@@ -2849,10 +2924,11 @@ printf 'a docs change\n' > "$CASE/deliveries/2026-11-05-docs-only.md"
 commit_all "a docs PR"
 body_plain > "$FX/body.md"
 dr_finish
+dr_fork_behind
 DR_EVENT=workflow_dispatch
 DR_PR=24
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: PR #24 is a docs PR' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: PR #24 is a docs PR' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
   && ! pushed_to_fork; then
   report "dr5. a docs PR is skipped (every changed path under deliveries/): exit 0, the reason logged" 0
 else
@@ -2862,9 +2938,10 @@ fi
 # dr6. A push whose commit merged no PR (a direct push): both lookups are empty, so the run retries once and
 # then skips, with the reason logged.
 dr_case dr6 other plain
+dr_fork_behind
 echo '[]' > "$FX/pulls.json"
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: no merged PR has merge commit' "$FX/run.log" \
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: no merged PR has merge commit' "$FX/run.log" \
   && grep -qF 'a direct push' "$FX/run.log" && [ "$(grep -cF 'commits/' "$FX/gh-calls.log")" = 4 ] \
   && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
   report "dr6. a direct push: the lookup retried once, both empty, skipped with the reason" 0
@@ -2875,10 +2952,11 @@ fi
 # dr6b. The lookup counts only PRs merged into main: a PR merged into another branch, and an unmerged one
 # that names the commit, are not the commit's PR, so the push is a direct one.
 dr_case dr6b other plain
+dr_fork_behind
 h=$(head_sha)
 printf '[{"number": 24, "merged_at": "2026-11-06T00:00:00Z", "merge_commit_sha": "%s", "base": {"ref": "release"}}, {"number": 25, "merged_at": null, "merge_commit_sha": "%s", "base": {"ref": "main"}}]\n' "$h" "$h" > "$FX/pulls.json"
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'a direct push' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'a direct push' "$FX/run.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
   report "dr6b. the lookup ignores a PR merged into another branch and an unmerged one" 0
 else
   report "dr6b. the lookup ignores a PR merged into another branch and an unmerged one" 1 "$(dr_detail)"
@@ -2886,9 +2964,10 @@ fi
 
 # dr7. After the window ends, the run skips before it reads anything from GitHub.
 dr_case dr7 other plain
+dr_fork_behind
 DR_NOW=2026-12-13T00:00:00Z
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && grep -qF 'skipped: the delivery window ended at 2026-12-12T23:00:00Z' "$FX/run.log" \
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: the delivery window ended at 2026-12-12T23:00:00Z' "$FX/run.log" \
   && [ ! -s "$FX/gh-calls.log" ]; then
   report "dr7. after the window ends: exit 0, the reason logged, no GitHub call" 0
 else
@@ -2903,8 +2982,9 @@ gen_ok=$GEN_RC
 commit_all "the delivery doc for PR 24, on main"
 git -C "$CASE" push -q -f "$DR_UP" HEAD:refs/heads/main
 DR_SHA=$h24
+dr_fork_behind
 dr_run
-if [ "$gen_ok" -eq 0 ] && no_writes && [ "$DR_RC" -eq 0 ] && grep -qF "skipped: $doc_name is already on main" "$FX/run.log" \
+if [ "$gen_ok" -eq 0 ] && no_writes && fork_main_is "$BASE" && [ "$DR_RC" -eq 0 ] && grep -qF "skipped: $doc_name is already on main" "$FX/run.log" \
   && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! pushed_to_fork; then
   report "dr8. a doc already on main is skipped: nothing made, nothing pushed" 0
 else
@@ -3208,14 +3288,16 @@ else
   report "dr31. two open findings: a warning, qodo-open 2 in the Limitations, the PR opened" 1 "$(dr_detail)"
 fi
 
-# dr32. Tokens: each gh call sees the read token except the PR writes (pr create, pr edit), which see the PR
-# token; the build sees neither PAT.
+# dr32. Tokens: each gh call sees the read token except the PR writes (pr create, pr edit), which see the PR token. The
+# two pushes (the docs branch and the fork's main) are answered with the fork token by askpass, and nothing else pushes.
 dr_case dr32 other plain
+dr_fork_behind
 dr_run
-if [ "$DR_RC" -eq 0 ] && token_ok && [ -e "$FX/build-env.log" ] && [ ! -s "$FX/build-env.log" ]; then
-  report "dr32. the PR token only on pr create and pr edit; neither PAT in the builds" 0
+if [ "$DR_RC" -eq 0 ] && main_pushed && [ "$(grep -c ' push ' "$FX/git.log")" = 2 ] && askpass_fork_only 2 && token_ok \
+  && [ -e "$FX/build-env.log" ] && [ ! -s "$FX/build-env.log" ]; then
+  report "dr32. the fork token answers both pushes (docs branch and fork main); the PR token only on pr create and pr edit; no PAT in the builds" 0
 else
-  report "dr32. the PR token only on pr create and pr edit; neither PAT in the builds" 1 "$(dr_detail); builds: $(cat "$FX/build-env.log" 2>/dev/null)"
+  report "dr32. the fork token answers both pushes (docs branch and fork main); the PR token only on pr create and pr edit; no PAT in the builds" 1 "$(dr_detail); builds: $(cat "$FX/build-env.log" 2>/dev/null)"
 fi
 
 # dr33. The workflow's SERVE_HOST=0.0.0.0 reaches the head build's preview server (a homepage change, so a
@@ -3819,6 +3901,206 @@ if [ "$gen_ok" -eq 0 ] && [ "$DR_RC" -eq 0 ] \
   report "dr77. the doc merges to main while the run waits for Qodo: skipped after the second check, no write" 0
 else
   report "dr77. the doc merges to main while the run waits for Qodo: skipped after the second check, no write" 1 "gen $gen_ok; $(dr_detail)"
+fi
+
+# dr78. A fork behind upstream, a new docs PR: the run pushes upstream's main to the fork's main as a fast-forward (the
+# fork token, by askpass), logs both SHAs, opens the docs PR, and the fork's main ends at upstream's HEAD.
+dr_case dr78 other plain
+dr_fork_behind
+h78=$(head_sha)
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF "fork behind: $BASE -> $h78" "$FX/run.log" && grep -qF "fork synced: $BASE -> $h78" "$FX/run.log" \
+  && main_pushed && askpass_fork_only 2 && grep -qF -- 'pr create' "$FX/gh-calls.log" && fork_has docs/delivery-pr-24 \
+  && fork_main_is "$h78" && token_ok; then
+  report "dr78. a fork behind upstream, new docs PR: main fast-forwarded by the fork token, both SHAs logged, fork main at upstream's HEAD" 0
+else
+  report "dr78. a fork behind upstream, new docs PR: main fast-forwarded by the fork token, both SHAs logged, fork main at upstream's HEAD" 1 "$(dr_detail)"
+fi
+
+# dr79. A fork behind upstream, a reused docs PR: the fork's main is fast-forwarded, then the docs PR's one commit is
+# amended and rebased onto it as dr2 does; the fork token answers both pushes.
+dr_case dr79 other plain
+dr_doc23 docs/delivery-pr-23
+dr_fork_behind
+pr_head=$(head_sha)
+dr_reuse docs/delivery-pr-23 @HEAD@
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF "fork behind: $BASE -> $pr_head" "$FX/run.log" && grep -qF "fork synced: $BASE -> $pr_head" "$FX/run.log" \
+  && main_pushed && askpass_fork_only 2 \
+  && [ "$(git -C "$DR_FORK" rev-list --count "$pr_head..refs/heads/docs/delivery-pr-23")" = 1 ] \
+  && [ "$(git -C "$DR_FORK" rev-parse 'refs/heads/docs/delivery-pr-23^')" = "$pr_head" ] \
+  && grep -qF -- 'pr edit 103 --repo lioramilbaum/lioramilbaum.github.io --title docs: add the delivery docs for PRs #23 and #24 --body-file' "$FX/gh-calls.log" \
+  && fork_main_is "$pr_head" && token_ok; then
+  report "dr79. a fork behind upstream, reused docs PR: main fast-forwarded, the one commit amended onto it, fork token on both pushes" 0
+else
+  report "dr79. a fork behind upstream, reused docs PR: main fast-forwarded, the one commit amended onto it, fork token on both pushes" 1 "$(dr_detail)"
+fi
+
+# dr80. The fork's main already equals upstream's: the run logs that the fork is current and pushes nothing to the
+# fork's main (only the docs branch).
+dr_case dr80 other plain
+h80=$(head_sha)
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF "fork current: main is $h80" "$FX/run.log" && ! main_pushed \
+  && askpass_fork_only 1 && grep -qF -- 'pr create' "$FX/gh-calls.log" && fork_main_is "$h80" && token_ok; then
+  report "dr80. a fork already at upstream's main: logged as current, no push to the fork's main" 0
+else
+  report "dr80. a fork already at upstream's main: logged as current, no push to the fork's main" 1 "$(dr_detail)"
+fi
+
+# dr81. The fork's main has a commit upstream lacks (a fork-only commit on the base): red before any push, naming both
+# SHAs and the count; nothing is pushed to the fork's main, and the fork's main is left as it is.
+dr_case dr81 other plain
+dr_scratch
+git -C "$W" checkout -q -b forkonly "$BASE"
+printf 'fork only\n' > "$W/fork-only.txt"
+git -C "$W" add -A
+dr_commit -m "a fork-only commit"
+FORK_ONLY=$(git -C "$W" rev-parse HEAD)
+git -C "$W" push -q -f "$DR_FORK" "forkonly:refs/heads/main"
+h81=$(head_sha)
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "the fork's main ($FORK_ONLY) has diverged from upstream's ($h81): 1 commit(s) upstream lacks" "$FX/run.log" \
+  && ! main_pushed && ! pushed_to_fork && fork_main_is "$FORK_ONLY" && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr81. a fork main with a commit upstream lacks: red, both SHAs and the count named, no push, fork main unchanged" 0
+else
+  report "dr81. a fork main with a commit upstream lacks: red, both SHAs and the count named, no push, fork main unchanged" 1 "$(dr_detail)"
+fi
+
+# dr82. The fork refuses the push of its main (a pre-receive hook stands in for a refusal; not GitHub's wording): red,
+# the fork's refusal and the run's message in the log, no push of the docs branch, no PR, and the fork's main unchanged.
+dr_case dr82 other plain
+dr_fork_behind
+dr_fork_refuses_main
+h82=$(head_sha)
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not fast-forward the fork's main to $h82: " "$FX/run.log" \
+  && grep -qF 'simulated refusal of refs/heads/main' "$FX/run.log" && grep -qF 'nothing is pushed' "$FX/run.log" \
+  && main_pushed && ! grep -qE -- ' push .*docs/delivery-pr-24' "$FX/git.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
+  && fork_main_is "$BASE" && ! fork_has docs/delivery-pr-24; then
+  report "dr82. the fork refuses its main: red, the refusal named, no docs-branch push, no PR, fork main unchanged" 0
+else
+  report "dr82. the fork refuses its main: red, the refusal named, no docs-branch push, no PR, fork main unchanged" 1 "$(dr_detail)"
+fi
+
+# dr83. The fork's main moves between the run's read and its push (a hook sets it to a commit that is not on upstream's
+# main, just before the push): the push is refused, so the run is red, the fork's main keeps the moved commit, and no
+# merge commit is made.
+dr_case dr83 other plain
+dr_fork_behind
+dr_scratch
+git -C "$W" checkout -q -b racey "$BASE"
+printf 'racing\n' > "$W/racing.txt"
+git -C "$W" add -A
+dr_commit -m "a commit on the fork's main during the run"
+RACE=$(git -C "$W" rev-parse HEAD)
+git -C "$W" push -q "$DR_FORK" "racey:refs/heads/racing"
+cat > "$FX/before-main-push" <<HOOK
+#!/usr/bin/env bash
+git --git-dir='$DR_FORK' update-ref refs/heads/main '$RACE'
+HOOK
+h83=$(head_sha)
+dr_run
+if [ "$DR_RC" -ne 0 ] && [ -e "$FX/before-main-push.ran" ] \
+  && grep -qF "could not fast-forward the fork's main to $h83: " "$FX/run.log" && grep -qF 'rejected' "$FX/run.log" \
+  && fork_main_is "$RACE" && [ "$(git -C "$DR_FORK" rev-list --parents -n1 "$RACE" | wc -w | tr -d ' ')" = 2 ] \
+  && ! grep -qE -- ' push .*docs/delivery-pr-24' "$FX/git.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && ! fork_has docs/delivery-pr-24; then
+  report "dr83. the fork's main moves before the push: the push is refused, red, the moved main kept, no merge commit, no PR" 0
+else
+  report "dr83. the fork's main moves before the push: the push is refused, red, the moved main kept, no merge commit, no PR" 1 "$(dr_detail)"
+fi
+
+# dr84. The fork accepts the push of its main, but the main is then back at the old base (a post-receive hook): the
+# confirm finds the fork's main unlike upstream's, so the run is red, names both SHAs, and pushes no docs branch.
+dr_case dr84 other plain
+dr_fork_behind
+dr_fork_main_rewinds "$BASE"
+h84=$(head_sha)
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "after the push the fork's main is $BASE, not upstream's main ($h84); nothing is pushed" "$FX/run.log" \
+  && main_pushed && ! grep -qE -- ' push .*docs/delivery-pr-24' "$FX/git.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
+  && fork_main_is "$BASE"; then
+  report "dr84. the fork's main is not upstream's after the push: red, both SHAs named, no docs-branch push, no PR" 0
+else
+  report "dr84. the fork's main is not upstream's after the push: red, both SHAs named, no docs-branch push, no PR" 1 "$(dr_detail)"
+fi
+
+# dr85. The fork has no main: red before the push, names the fork and its missing main, and pushes nothing.
+dr_case dr85 other plain
+git -C "$DR_FORK" update-ref -d refs/heads/main
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not fetch the fork's main from $DR_FORK (the fork has no main, or cannot be read)" "$FX/run.log" \
+  && grep -qF "couldn't find remote ref refs/heads/main" "$FX/run.log" \
+  && ! main_pushed && ! pushed_to_fork && ! grep -qF -- 'pr create' "$FX/gh-calls.log"; then
+  report "dr85. a fork with no main: red, named (the fork's main could not be fetched), nothing pushed" 0
+else
+  report "dr85. a fork with no main: red, named (the fork's main could not be fetched), nothing pushed" 1 "$(dr_detail)"
+fi
+
+# dr86. Upstream's main gains a commit after the run's read (a hook moves it just before the main push): the run pushes
+# the commit it read, the confirm passes, and the docs branch's base is an ancestor of the fork's main.
+dr_case dr86 other plain
+dr_fork_behind
+h86=$(head_sha)
+dr_scratch
+printf 'upstream gains a commit\n' > "$W/gained.txt"
+git -C "$W" add -A
+dr_commit -m "a commit upstream gains during the run"
+GAIN=$(git -C "$W" rev-parse HEAD)
+git -C "$W" push -q "$DR_UP" "HEAD:refs/heads/gained"
+cat > "$FX/before-main-push" <<HOOK
+#!/usr/bin/env bash
+git --git-dir='$DR_UP' update-ref refs/heads/main '$GAIN'
+HOOK
+dr_run
+if [ "$DR_RC" -eq 0 ] && [ -e "$FX/before-main-push.ran" ] && grep -qF "fork synced: $BASE -> $h86" "$FX/run.log" \
+  && main_pushed && askpass_fork_only 2 && fork_main_is "$h86" \
+  && git -C "$DR_FORK" merge-base --is-ancestor "$h86" refs/heads/docs/delivery-pr-24 \
+  && grep -qF -- 'pr create' "$FX/gh-calls.log" && token_ok; then
+  report "dr86. upstream gains a commit after the read: the commit read is pushed and confirmed; the docs branch sits on it" 0
+else
+  report "dr86. upstream gains a commit after the read: the commit read is pushed and confirmed; the docs branch sits on it" 1 "$(dr_detail)"
+fi
+
+# dr88. The fetch of upstream's main from origin fails inside the sync (a simulated git failure of that fetch): red,
+# named, nothing pushed to the fork's main or the docs branch, no PR. Without the die on that fetch, the run would go on.
+dr_case dr88 other plain
+dr_fork_behind
+printf '%s\n' 'refs/delivery/up-main' > "$FX/fail-git-arg"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not fetch upstream's main from origin: simulated git failure" "$FX/run.log" \
+  && ! main_pushed && ! pushed_to_fork && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && fork_main_is "$BASE"; then
+  report "dr88. the fetch of upstream's main fails: red, named, nothing pushed, no PR" 0
+else
+  report "dr88. the fetch of upstream's main fails: red, named, nothing pushed, no PR" 1 "$(dr_detail)"
+fi
+
+# dr89. The fork's main is deleted after the push is accepted (a post-receive hook): the run's re-read of the fork's main
+# fails, so it is red, names the re-read, and pushes no docs branch and opens no PR.
+dr_case dr89 other plain
+dr_fork_behind
+dr_fork_main_deletes
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not re-read the fork's main after the push: " "$FX/run.log" \
+  && grep -qF "couldn't find remote ref refs/heads/main" "$FX/run.log" && main_pushed \
+  && ! grep -qE -- ' push .*docs/delivery-pr-24' "$FX/git.log" && ! grep -qF -- 'pr create' "$FX/gh-calls.log" \
+  && ! git -C "$DR_FORK" rev-parse -q --verify refs/heads/main >/dev/null; then
+  report "dr89. the re-read of the fork's main fails after the push: red, named, no docs-branch push, no PR" 0
+else
+  report "dr89. the re-read of the fork's main fails after the push: red, named, no docs-branch push, no PR" 1 "$(dr_detail)"
+fi
+
+# dr90. git fails the rev-list that compares the fork's main with upstream's (a simulated git failure of that call): red,
+# named, nothing pushed, no PR, and the fork's main unchanged.
+dr_case dr90 other plain
+dr_fork_behind
+printf '%s\n' 'rev-list --count' > "$FX/fail-git-arg"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not compare the fork's main with upstream's: simulated git failure" "$FX/run.log" \
+  && ! main_pushed && ! pushed_to_fork && ! grep -qF -- 'pr create' "$FX/gh-calls.log" && fork_main_is "$BASE"; then
+  report "dr90. the comparison of the fork's main with upstream's fails: red, named, nothing pushed, no PR" 0
+else
+  report "dr90. the comparison of the fork's main with upstream's fails: red, named, nothing pushed, no PR" 1 "$(dr_detail)"
 fi
 
 if [ "$failures" -ne 0 ]; then

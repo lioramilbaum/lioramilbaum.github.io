@@ -4,8 +4,10 @@ name: Delivery doc
 # docs PR (one commit, changing only deliveries/) that the owner merges. scripts/delivery-run.sh
 # does the work; this file runs it from main on a push to main and on a manual dispatch. Two PATs
 # (AGENTS.md Setup) are set on the one run step only: AGENT_FORK_TOKEN pushes the docs branch to
-# the fork, and AGENT_PR_TOKEN opens and edits the docs PR, so CI runs on it (GITHUB_TOKEN would
-# not start Check site). Nothing here merges, posts to the discussions, or touches a Qodo finding.
+# the fork and fast-forwards the fork's main to upstream's before that push,
+# and AGENT_PR_TOKEN opens and edits the docs PR, so CI runs on it (GITHUB_TOKEN would not start
+# Check site).
+# Nothing here merges, posts to the discussions, or touches a Qodo finding.
 on:
   push:
     branches:
@@ -26,10 +28,13 @@ permissions:
 
 jobs:
   generate:
-    # Only this repository's main: a fork's push or a run from another branch does nothing.
+    # Only this repository's main: a fork's push or a run from another branch does nothing. Renovate's merges
+    # to main (pushed by renovate[bot], the push's actor) do not start the job; a dispatch by the owner still
+    # runs, and scripts/delivery-run.sh still skips a dispatched Renovate PR, logged (AGENTS.md rule 6).
     if: >-
       github.repository == 'lioramilbaum/lioramilbaum.github.io' &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/main' &&
+      github.actor != 'renovate[bot]'
     # One run at a time, none cancelled, each waiting run queued (FIFO): two merges within a minute
     # both land in one docs PR, because the second run starts after the first has opened it. On the
     # job, so a run whose if: skips the job never joins the queue.
@@ -56,10 +61,12 @@ jobs:
         run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
       - name: Generate the delivery doc
-        # The two PATs reach this step only. The script removes them from its environment before it
-        # runs any script, git command or build, so none of them inherits them (its first lines, the
-        # cd through dirname, run before the removal and see them). Code running as the same user could
-        # still read them from /proc, and every script the run executes is code already merged to main.
+        # The two PATs reach this step only. AGENT_FORK_TOKEN also pushes the fork's main (the sync), and
+        # is given to git only through askpass on a push. The script removes
+        # them from its environment before it runs any script, git command or build, so none of them
+        # inherits them (its first lines, the cd through dirname, run before the removal and see them).
+        # Code running as the same user could still read them from /proc, and every script the run
+        # executes is code already merged to main.
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
