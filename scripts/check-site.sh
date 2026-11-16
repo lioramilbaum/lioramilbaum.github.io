@@ -89,6 +89,27 @@ grep -Fq '<strong>Practical platforms. Open collaboration.</strong>' <<<"$(sed '
 grep -Fq '<meta name="viewport" content="width=device-width, initial-scale=1">' "$page" \
   || fail "viewport meta tag missing from the homepage" _layouts/home.html
 
+# The LinkedIn followers line: one line under the social links, between the nav and <main>
+# (AGENTS.md rule 3). Its number and date are the owner's, from _data/linkedin.yml, so this checks
+# their format, not their values. Invalid data hides the line; scripts/test-site.sh proves that.
+followers_re='<p class="followers"><a href="https://linkedin\.com/in/lmilbaum" rel="me noopener">[1-9][0-9]{0,2}(,[0-9]{3})* LinkedIn followers · as of [A-Z][a-z]{2} [1-9][0-9]?, [0-9]{4}</a></p>'
+mentions=$(grep -oE 'class="followers"|LinkedIn followers' "$page" | wc -l || true)
+if (( mentions == 0 )); then
+  fail "LinkedIn followers line missing from the homepage (_data/linkedin.yml needs followers, a positive integer, and as_of, YYYY-MM-DD)" _layouts/home.html
+fi
+exact=$(grep -oE "$followers_re" "$page" | wc -l || true)
+(( exact == 1 && mentions == 2 )) || fail "malformed LinkedIn followers line on the homepage" _layouts/home.html
+social_nav=$(sed -n '/<nav aria-label="Social links">/,/<\/nav>/p' "$page" | sed 's|</nav>.*|</nav>|')
+grep -Fq followers <<<"$social_nav" && fail "LinkedIn followers line inside the social links nav" _layouts/home.html
+below_nav=$(sed -n '/<\/nav>/,/<main id="main"/p' "$page")
+inside=$(grep -oE "$followers_re" <<<"$below_nav" | wc -l || true)
+(( inside == 1 )) || fail "LinkedIn followers line is not between the social links and <main>" _layouts/home.html
+# The link's colours, light and dark, as the content links' (the layout's style block).
+grep -Eq '\.followers a[^{}]*\{[^}]*color: #0366d6;' <<<"$styles" \
+  || fail "no .followers a rule with color #0366d6 in the homepage styles" _layouts/home.html
+grep -Eq '@media \(prefers-color-scheme: dark\)[[:space:]]*\{[[:space:]]*\.followers a[^{}]*\{[^}]*color: #58a6ff;' <<<"$styles" \
+  || fail "no dark-mode .followers a rule with color #58a6ff in the homepage styles" _layouts/home.html
+
 # Featured work and the next steps come after News and before the topic sections.
 # kramdown renders the apostrophe in "Let's" as a typographic quote, so match any.
 together_h='Let[^<]*s work together'
