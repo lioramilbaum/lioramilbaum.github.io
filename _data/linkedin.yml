@@ -1,0 +1,5 @@
+# The homepage's LinkedIn followers line. The owner updates both values by hand.
+# followers is a whole number, digits only (quotes are fine; commas, decimals and signs are not); as_of is YYYY-MM-DD.
+# An invalid value hides the line (see _layouts/home.html and AGENTS.md rule 3).
+followers: 29572
+as_of: 2026-11-16

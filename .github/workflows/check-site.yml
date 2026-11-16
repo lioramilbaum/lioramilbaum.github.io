@@ -35,6 +35,11 @@ jobs:
         shell: bash
         run: bash scripts/check-site.sh _site
 
+      - name: Test the LinkedIn followers line
+        # Docker, the Jekyll image the build step pulled, no network: each case builds a copy of the checkout.
+        shell: bash
+        run: bash scripts/test-site.sh
+
       - name: Check workflow files
         # Ruby in the Jekyll image the build step pulled; no network.
         shell: bash
