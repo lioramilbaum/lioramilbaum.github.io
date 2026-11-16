@@ -236,7 +236,7 @@ files.each do |path|
     report.call(name, "does not have exactly one job") unless jobs.size == 1
     jobs.each do |jid, job|
       next report.call(name, "job #{jid} is not a mapping") unless job.is_a?(Hash)
-      report.call(name, "job #{jid} if is not exactly this repository's main") unless job["if"].to_s.gsub(/\s+/, " ").strip == "github.repository == 'lioramilbaum/lioramilbaum.github.io' && github.ref == 'refs/heads/main'"
+      report.call(name, "job #{jid} if is not exactly this repository's main, not a Renovate actor (github.actor != 'renovate[bot]')") unless job["if"].to_s.gsub(/\s+/, " ").strip == "github.repository == 'lioramilbaum/lioramilbaum.github.io' && github.ref == 'refs/heads/main' && github.actor != 'renovate[bot]'"
       # One run at a time, none cancelled, queued (AGENTS.md rule 6): two merges in a minute land in one docs PR.
       report.call(name, "job #{jid} concurrency is not exactly group delivery-doc, cancel-in-progress false and queue max") unless job["concurrency"] == { "group" => "delivery-doc", "cancel-in-progress" => false, "queue" => "max" }
       report.call(name, "job #{jid} runs-on is not ubuntu-26.04") unless job["runs-on"] == "ubuntu-26.04"
