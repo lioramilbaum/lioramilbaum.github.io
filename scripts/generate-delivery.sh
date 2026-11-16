@@ -2,8 +2,8 @@
 # AGENTS.md rule 6: writes a merged PR's delivery doc, deliveries/<PR open date>-<branch
 # slug>.md, from deliveries/TEMPLATE.md. Every section comes from the PR
 # description, CI runs, the builds, or Qodo's review comment. Nothing is written
-# by hand. The delivery-doc skill runs this after the PR merges and adds the doc in
-# a docs PR. It refuses a PR that has not merged.
+# by hand. The Delivery doc workflow (scripts/delivery-run.sh) runs this after the PR merges and
+# adds the doc in a docs PR. It refuses a PR that has not merged.
 # The metadata line records the merged head (head=), its content digest, and how many
 # findings Qodo's final review lists (qodo-open, AGENTS.md rule 9). check-delivery.sh
 # checks the digest against the head on the docs PR; qodo-open is evidence there.
@@ -556,7 +556,7 @@ if section "$tmp/pr-body.md" "Hackathon" > "$hack" && [[ -s "$hack" ]]; then
   header_extra=" · **Hackathon:** $day_line"
   # Each heading follows one blank line; the parts before it end in a newline.
   {
-    printf 'For the owner to post in the day'"'"'s thread. The skill never posts to the hackathon discussions.\n\n'
+    printf 'For the owner to post in the day'"'"'s thread. The Delivery doc workflow never posts to the hackathon discussions.\n\n'
     printf '````markdown\n'
     printf '## Challenge\n\n'
     cat "$hack"

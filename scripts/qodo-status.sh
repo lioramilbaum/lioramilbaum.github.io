@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # AGENTS.md rule 9: reports whether Qodo's latest review of a PR names the PR head, whether it
-# has settled, and how many findings it lists. The delivery-doc skill polls it instead of
+# has settled, and how many findings it lists. scripts/delivery-run.sh polls it instead of
 # reading Qodo's comment by hand, and scripts/qodo-gate.sh turns its output into a commit
 # status. gh only reads; --fetch adds git objects to this clone and nothing else.
 #
 # Usage: scripts/qodo-status.sh --pr N [--quiet-minutes M] [--fetch REMOTE]
 #   --quiet-minutes M  the review comment must be unedited for M minutes (default 5, the
-#                      skill's quiet period: Qodo often posts a review in two passes).
+#                      quiet period: Qodo often posts a review in two passes).
 #   --fetch REMOTE     a commit this clone lacks is fetched by SHA from REMOTE (git fetch
 #                      --depth=1). Without it, a missing commit is an error (exit 1), except
 #                      that a reviewed commit a fetch cannot get counts as other content.

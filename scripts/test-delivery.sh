@@ -1566,24 +1566,24 @@ else
   report "om. an earlier doc's metadata line (changed=, base=) still records the homepage" 1 "$(cat "$FX/gen.log")"
 fi
 
-# cut. The window is exclusive at 2026-12-12T23:00:00Z: a stale doc passes once it has
+# cut. The window is exclusive at 2026-12-02T23:00:00Z: a stale doc passes once it has
 # ended and fails one second before.
 stale_case cut
-check "$CASE" 2026-12-12T23:00:00Z
+check "$CASE" 2026-12-02T23:00:00Z
 if [ "$CHECK_RC" -eq 0 ] && grep -q 'ended' "$FX/check.log"; then
   report "cut. at 23:00:00Z the check passes without reading the doc" 0
 else
   report "cut. at 23:00:00Z the check passes without reading the doc" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
-check "$CASE" 2026-12-12T22:59:59Z
+check "$CASE" 2026-12-02T22:59:59Z
 if [ "$CHECK_RC" -ne 0 ] && grep -q 'stale' "$FX/check.log"; then
   report "cut. at 22:59:59Z the stale doc fails" 0
 else
   report "cut. at 22:59:59Z the stale doc fails" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
-win "$CASE" 2026-12-12T22:59:59Z
+win "$CASE" 2026-12-02T22:59:59Z
 w1=$WIN_RC
-win "$CASE" 2026-12-12T23:00:00Z
+win "$CASE" 2026-12-02T23:00:00Z
 w2=$WIN_RC
 if [ "$w1" -eq 0 ] && [ "$w2" -eq 3 ]; then
   report "cut. --window exits 0 open, 3 ended" 0
@@ -1593,7 +1593,7 @@ fi
 
 clock=$tmp/clock
 mkdir -p "$clock"
-printf '#!/bin/sh\necho 2026-12-12T23:00:00Z\n' > "$clock/date"
+printf '#!/bin/sh\necho 2026-12-02T23:00:00Z\n' > "$clock/date"
 chmod +x "$clock/date"
 clock_rc=0
 (cd "$CASE" && env -u NOW PATH="$clock:$PATH" bash scripts/check-delivery.sh --window >/dev/null 2>&1) || clock_rc=$?
@@ -2965,9 +2965,9 @@ fi
 # dr7. After the window ends, the run skips before it reads anything from GitHub.
 dr_case dr7 other plain
 dr_fork_behind
-DR_NOW=2026-12-13T00:00:00Z
+DR_NOW=2026-12-02T23:00:00Z
 dr_run
-if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: the delivery window ended at 2026-12-12T23:00:00Z' "$FX/run.log" \
+if [ "$DR_RC" -eq 0 ] && no_writes && fork_main_is "$BASE" && grep -qF 'skipped: the delivery window ended at 2026-12-02T23:00:00Z' "$FX/run.log" \
   && [ ! -s "$FX/gh-calls.log" ]; then
   report "dr7. after the window ends: exit 0, the reason logged, no GitHub call" 0
 else
@@ -3236,7 +3236,7 @@ else
 fi
 
 # dr29. Qodo's review names other content (stale) on every poll: the run is red after the polls, names the stale
-# state and the exit code, and nothing is pushed or opened (the workflow is stricter than the skill's B4 warning).
+# state and the exit code, and nothing is pushed or opened.
 dr_case dr29 other plain
 fx_qodo_clear "$BASE"
 DR_POLLS=2
