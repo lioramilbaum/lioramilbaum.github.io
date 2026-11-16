@@ -2,7 +2,7 @@
 # AGENTS.md Setup, the agent run: takes an issue the owner labelled ready-for-agent, makes its
 # change on a branch in the owner's fork, opens the PR upstream, and works through Qodo's findings
 # for up to three rounds. It never merges, never dismisses or marks a Qodo finding, never adds
-# ready-for-agent, and never generates the delivery doc (the owner runs the delivery-doc skill).
+# ready-for-agent, and never generates the delivery doc (the Delivery doc workflow does, after the merge).
 #
 # What is enforced. The three tokens live in this process's environment, which runs git and gh. The
 # model runs as a child of this process with env -i: PATH, a throwaway HOME and its OAuth token,
@@ -542,7 +542,7 @@ wait_for_ci() {
 # the agent never does.
 ready() {
   stage='done'; where=''
-  pr_gh pr comment "$pr" --repo "$repo" --body "The agent run is done: Qodo's latest review of this head lists no open findings, and CI has passed on it. Ready for the owner to review. The owner merges, then runs the delivery-doc skill on the merged PR (AGENTS.md rule 6); the agent does neither." >/dev/null \
+  pr_gh pr comment "$pr" --repo "$repo" --body "The agent run is done: Qodo's latest review of this head lists no open findings, and CI has passed on it. Ready for the owner to review. The owner merges; the Delivery doc workflow then adds its delivery doc (AGENTS.md rule 6). The agent does neither." >/dev/null \
     || echo "warning: could not comment on PR $pr" >&2
   pr_gh issue comment "$issue" --repo "$repo" --body "PR #$pr is ready for the owner: Qodo's latest review lists no open findings, and CI has passed." >/dev/null \
     || echo "warning: could not comment on issue #$issue" >&2

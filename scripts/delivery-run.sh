@@ -424,7 +424,7 @@ ASKPASS
     skip "$name is already on main (it merged while this run waited for Qodo)"
   fi
 
-  # The docs branch: the one open docs PR this run adds to (skill B3's query), or a new one. gh lists up to
+  # The docs branch: the one open docs PR this run adds to (found by its branch), or a new one. gh lists up to
   # 1000 open PRs; a list that reaches that many could hide a docs PR, so it fails.
   branch="docs/delivery-pr-$n"
   open_json=$(gh pr list --repo "$repo" --state open --limit 1000 --json number,headRefName,headRepositoryOwner,baseRefName,files) \

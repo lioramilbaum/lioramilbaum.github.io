@@ -20,8 +20,8 @@ LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-# The delivery window ends here: exclusive, the end of Dec 12 CET (AGENTS.md rule 6).
-cutoff=2026-12-12T23:00:00Z
+# The delivery window ends here: exclusive, the end of Dec 2 CET (AGENTS.md rule 6).
+cutoff=2026-12-02T23:00:00Z
 window_open() {
   local now
   now=${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
