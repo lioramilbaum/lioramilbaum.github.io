@@ -293,7 +293,23 @@
     {%- assign a = li.as_of | append: "" -%}
     {%- assign ad = li.as_of | date: "%Y-%m-%d" -%}
     {%- assign ay = li.as_of | date: "%Y" -%}
-    {%- if n > 0 and s == back and a != "" and ad == a and ay != a -%}
+    {%- comment -%} YAML has already parsed followers (012 is 10, 0x1A is 26), so check the line as written. include_relative resolves from the page's directory, so only a root page can use this layout. {%- endcomment -%}
+    {%- assign written = 0 -%}
+    {%- if li -%}
+    {%- capture raw -%}{% include_relative _data/linkedin.yml %}{%- endcapture -%}
+    {%- assign lines = raw | newline_to_br | split: "<br />" -%}
+    {%- for line in lines -%}
+    {%- assign l = line | strip_newlines -%}
+    {%- assign head = l | slice: 0, 10 -%}
+    {%- if head == "followers:" -%}
+    {%- assign v = l | remove_first: "followers:" | strip -%}
+    {%- assign dq = '"' | append: back | append: '"' -%}
+    {%- assign sq = "'" | append: back | append: "'" -%}
+    {%- if v == back or v == dq or v == sq -%}{%- assign written = written | plus: 1 -%}{%- else -%}{%- assign written = written | plus: 2 -%}{%- endif -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- endif -%}
+    {%- if n > 0 and s == back and written == 1 and a != "" and ad == a and ay != a -%}
     {%- assign digits = back | split: "" -%}{%- assign len = back.size -%}
     {%- capture grouped -%}{%- for c in digits -%}{%- if forloop.index0 > 0 -%}{%- assign left = len | minus: forloop.index0 | modulo: 3 -%}{%- if left == 0 -%},{%- endif -%}{%- endif -%}{{ c }}{%- endfor -%}{%- endcapture -%}
     <p class="followers"><a href="https://linkedin.com/in/lmilbaum" rel="me noopener">{{ grouped }} LinkedIn followers · as of {{ site.data.linkedin.as_of | date: "%b %-d, %Y" }}</a></p>
