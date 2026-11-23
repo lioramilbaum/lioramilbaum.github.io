@@ -1,5 +1,5 @@
 # The homepage's LinkedIn followers line. The owner updates both values by hand.
 # followers is a whole number written as plain decimal digits with no leading zero, alone on its line with no trailing comment (quotes are fine; commas, decimals and signs are not). This file is read as Liquid too, so it must contain no Liquid tags or variables. as_of is YYYY-MM-DD.
 # An invalid value hides the line (see _layouts/home.html and AGENTS.md rule 3).
-followers: 29973
+followers: 29975
 as_of: 2026-11-23
