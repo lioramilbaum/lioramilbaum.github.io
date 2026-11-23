@@ -4,18 +4,18 @@
 # a built page and prints "<code> <url>". Exits non-zero if any response is not 2xx.
 # The LinkedIn share-offsite URL is skipped: it redirects to a login page.
 #
-# Checks start in batches of 12 background jobs, and each batch waits for its slowest
-# job before the next starts. A job takes at most one link's retry budget (about
-# 66 s), or about 200 s for a discussion comment lookup (up to 3 API pages, each with
-# the same budget). So the worst case is the sum over batches: 66 s for a batch of
-# links only, 200 s for a batch with a comment lookup. This page has 14 links and 8
-# comment lookups (22 jobs), in two batches of 12: 12 links, then 2 links and 8
-# lookups. The worst case is 66 s + 198 s = 264 s (a lookup is 3 pages of 66 s), inside
-# CI's 5-minute step timeout with 36 s to spare. The second batch has two free slots:
-# a 23rd and a 24th job fit in it (one more day's link and comment lookup). A 25th job
-# starts a third batch, which adds at least 66 s and takes the worst case past 300 s,
-# so the time budget must change before a job past 24 is added.
-# Check that sum before adding links or comment lookups.
+# Checks start in batches of 18 background jobs, in order: links first, then comment
+# lookups. Each batch waits for its slowest job before the next starts. A job takes at
+# most one link's retry budget (about 66 s), or about 200 s for a comment lookup (up to
+# 3 API pages, each with the same budget). So the worst case is the sum over batches.
+# This page has 18 links and 12 lookups (30 jobs): a batch of 18 links (66 s), then a
+# batch of 12 lookups (198 s), 264 s in all, inside CI's 5-minute step timeout with
+# 36 s to spare. That holds while the cap is between ceil(jobs/2) and the number of
+# links, so the first batch has links only. Each new day adds a link and a lookup:
+# Days 13 to 15 still fit (Day 15: 21 links + 15 lookups = 36 jobs = 2 x 18). The Day 16
+# link (38 jobs) starts a third batch and takes the worst case past 300 s, so the budget
+# must change before it is added. A cap above the number of links puts a lookup in the
+# first batch and gives two lookup batches (396 s).
 #
 # Discussion comment links (https://github.com/<o>/<r>/discussions/<n>#discussioncomment-<id>)
 # are also looked up through the REST API: 200 if the discussion has the comment,
@@ -73,7 +73,7 @@ comment() {
 }
 
 # At most $cap checks run at once: every $cap-th job waits for the batch before it.
-cap=12
+cap=18
 n=0
 start() {
   n=$((n + 1))
