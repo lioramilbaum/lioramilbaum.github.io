@@ -1370,6 +1370,42 @@ else
   report "shot. a docs PR with only a screenshot and TEMPLATE.md passes with no doc read" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
+# del. A docs PR that deletes a delivery doc passes: the deleted doc is not in HEAD, so it is
+# skipped and never read.
+new_case del
+printf 'old\n' > "$CASE/deliveries/2026-10-01-old.md"
+commit_all "a doc that is on the base"
+git -C "$CASE" rm -q deliveries/2026-10-01-old.md
+commit_all "delete a doc"
+check "$CASE"
+if [ "$CHECK_RC" -eq 0 ] && grep -qF 'docs PR: 0 delivery doc(s) checked' "$FX/check.log" \
+  && ! grep -qF '2026-10-01-old.md' "$FX/check.log" && ! grep -qF 'no delivery metadata' "$FX/check.log" \
+  && ! grep -qF 'fatal:' "$FX/check.log"; then
+  report "del. a docs PR that deletes a delivery doc passes and does not read it" 0
+else
+  report "del. a docs PR that deletes a delivery doc passes and does not read it" 1 "rc $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
+# deladd. A docs PR that deletes one doc and adds a valid one checks only the added doc.
+new_case deladd
+printf 'old\n' > "$CASE/deliveries/2026-10-01-old.md"
+printf 'notes\n' > "$CASE/notes.txt"
+commit_all "a change off the homepage, with an old doc"
+body_plain > "$FX/body.md"
+fx_pr "$(head_sha)" "$FX/body.md"
+fx_runs 101 "$(head_sha)" success success
+fx_qodo_clear "$(head_sha)"
+gen "$CASE"
+git -C "$CASE" rm -q deliveries/2026-10-01-old.md
+commit_all "delivery doc"
+check "$CASE"
+if [ "$GEN_RC" -eq 0 ] && [ "$CHECK_RC" -eq 0 ] && grep -qF 'docs PR: 1 delivery doc(s) checked' "$FX/check.log" \
+  && grep -qF "$doc_name: ok" "$FX/check.log" && ! grep -qF '2026-10-01-old.md' "$FX/check.log"; then
+  report "deladd. a docs PR that deletes one doc and adds a valid one checks only the added doc" 0
+else
+  report "deladd. a docs PR that deletes one doc and adds a valid one checks only the added doc" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
 # tab. A docs PR whose doc's name has a tab is a docs PR, and that doc is read under its own
 # name: with no metadata, it fails. (Git quotes such a name unless the list is -z, and a
 # quoted name is outside deliveries/, so the PR passed as a code PR.)
