@@ -8,14 +8,14 @@
 # lookups. Each batch waits for its slowest job before the next starts. A job takes at
 # most one link's retry budget (about 66 s), or about 200 s for a comment lookup (up to
 # 3 API pages, each with the same budget). So the worst case is the sum over batches.
-# This page has 18 links and 12 lookups (30 jobs): a batch of 18 links (66 s), then a
-# batch of 12 lookups (198 s), 264 s in all, inside CI's 5-minute step timeout with
-# 36 s to spare. That holds while the cap is between ceil(jobs/2) and the number of
-# links, so the first batch has links only. Each new day adds a link and a lookup:
-# Days 13 to 15 still fit (Day 15: 21 links + 15 lookups = 36 jobs = 2 x 18). The Day 16
-# link (38 jobs) starts a third batch and takes the worst case past 300 s, so the budget
-# must change before it is added. A cap above the number of links puts a lookup in the
-# first batch and gives two lookup batches (396 s).
+# This page has 19 links and 13 lookups (32 jobs): a batch of 18 links (66 s), then a
+# batch of 1 link and 13 lookups (198 s), 264 s in all, inside CI's 5-minute step
+# timeout with 36 s to spare. That holds while the cap is between ceil(jobs/2) and the
+# number of links, so the first batch has links only. Each new day adds a link and a
+# lookup: Days 14 and 15 still fit (Day 15: 21 links + 15 lookups = 36 jobs = 2 x 18).
+# The Day 16 link (38 jobs) starts a third batch and takes the worst case past 300 s, so
+# the budget must change before it is added. A cap above the number of links puts a
+# lookup in the first batch and gives two lookup batches (396 s).
 #
 # Discussion comment links (https://github.com/<o>/<r>/discussions/<n>#discussioncomment-<id>)
 # are also looked up through the REST API: 200 if the discussion has the comment,
