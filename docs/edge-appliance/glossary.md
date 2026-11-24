@@ -10,6 +10,10 @@ This is a living reference for the terminology used throughout the Edge Applianc
 
 The definitions describe the current architectural model. They are intentionally implementation-agnostic and may evolve as the model develops.
 
+## Edge Appliance Model (EAM)
+
+The architecture for producing, composing, delivering, and operating independently versioned Infrastructure, Platform, and Application Layers as one Product. The EAM Software Factory spans Layer production in the Connected Environment through deployment and operation on the appliance.
+
 ## Air-gapped Edge Appliance
 
 An Edge Appliance designed to be deployed and operated in a Target Environment without relying on continuous connectivity to external systems.
@@ -126,6 +130,10 @@ Examples may include development, integration, validation, testing, release, or 
 
 A Lifecycle Environment is not the deployment destination of the Edge Appliance.
 
+## Connected Environment
+
+The environment where Layer owners release their artifacts and the Product Package is assembled before transfer to the Target Environment.
+
 ## Target Environment
 
 The environment in which a Product Version is deployed and operated.
@@ -133,6 +141,10 @@ The environment in which a Product Version is deployed and operated.
 The Target Environment provides deployment-specific resources, characteristics, and configuration values that are not part of the immutable Product Package but are required by its contracts.
 
 When the deployment destination is isolated from external connectivity, it is an air-gapped Target Environment.
+
+## Target Environment Capability Contract
+
+The capabilities and compatibility requirements that a Product Version relies on the Target Environment to satisfy. For example, the contract can require an installed controller that supports a particular API. Delivery checks that the actual appliance provides the required capability before deployment.
 
 ## Configuration Contract
 
@@ -168,7 +180,7 @@ For an air-gapped Target Environment, each Deployment Dependency must either be 
 
 The property that all Deployment Dependencies required by a Product Version are either carried by the Product Package or are explicitly guaranteed by the Target Environment.
 
-This property allows the Product Package to be self-contained without requiring the product architecture to become monolithic.
+Layer owners declare their deployment dependencies. At release, the Product checks direct and transitive dependencies across the selected Layer Versions against the package contents and the Target Environment Capability Contract. At the appliance, Delivery verifies that the imported artifacts are accessible and the required capabilities are present and compatible.
 
 ## Artifact
 
@@ -204,6 +216,8 @@ An SBOM supports security analysis, license review, vulnerability management, an
 
 A system used to store, identify, retrieve, and distribute versioned artifacts.
 
+In EAM diagrams, **Artifact Store** denotes this storage and retrieval role in a particular environment. The Connected Environment and the Edge Appliance can each have their own store.
+
 An Artifact Repository may store container images, packages, archives, models, or other content. The repository location is separate from the logical identity of the Layer Version or Product Version that uses the artifacts.
 
 ## Verification Evidence
@@ -216,13 +230,17 @@ Verification Evidence may include signature results, content digests, test repor
 
 A stable, location-independent identity used to refer to an artifact across repositories, transfers, and deployment environments.
 
-Artifact Identity remains unchanged when the artifact's storage location or access method changes. It must identify the exact logical artifact expected by a Layer Version or Product Version.
+Artifact Identity remains unchanged when the artifact's storage location or access method changes. For a released container image, the recorded manifest digest identifies the exact manifest expected after import. Rewriting that manifest produces a new identity that must be traceable to the original.
+
+## Artifact Integrity
+
+The property that retrieved content matches the released content identified by its expected digest. For a container image, verification can check the manifest against the release record and the retrieved blobs against the digests in that manifest. Product authorization is a separate Trust Policy decision.
 
 ## Artifact Access Information
 
 The location and method used to retrieve an artifact from a particular repository or delivery medium.
 
-Artifact Access Information may change as an artifact is promoted, transferred, mirrored, or moved into an air-gapped environment. A change in access information does not by itself change the artifact's identity.
+EAM uses **Artifact Access** for how an artifact is retrieved. Its Artifact Access Information may change as an artifact is promoted, transferred, mirrored, or moved into an air-gapped environment. A change in access information does not by itself change the artifact's identity.
 
 ## Repository Resolution
 
@@ -230,17 +248,23 @@ The process of locating a versioned artifact or deliverable and discovering the 
 
 Repository Resolution translates stable identities and version selections into concrete access information without making repository location part of the architectural identity.
 
+## Delivery
+
+The architectural responsibility for resolving the selected artifacts and dependencies for packaging, moving the released Product Package to the appliance, and making its contents available for deployment. Figure 2 of Article 8 labels this responsibility **Product Delivery**.
+
 ## Transfer
 
 The movement of a versioned deliverable and its required artifacts between repositories or delivery media while preserving their identity and integrity.
 
+**Product Package Transfer** moves a released Product Package, including its Layer Payloads, from the Connected Environment into the Target Environment. Product Package Import then makes the delivered artifacts available for local use.
+
 Transfer may copy content, preserve selected external references, or transform repository-specific access information according to an explicit policy.
 
-## Localization
+## Import
 
-The adaptation of artifact references or deployment inputs for a specific Target Environment after or during delivery.
+**Product Package Import** makes artifacts from a transferred Product Package available through the Edge Appliance’s internal Artifact Stores. For example, Import can load a packaged container image into the appliance registry and verify its manifest against the digest recorded at release.
 
-Localization changes how content is accessed or consumed in that environment. It must not silently change the identity or validated meaning of the Layer Version or Product Version being deployed.
+Deployment references must resolve to the imported artifacts. A deployment manifest or registry mirror can supply the local access path while preserving the released artifact’s identity.
 
 ## Trust Policy
 
