@@ -145,6 +145,21 @@ redact() {
 # not a repository, so gh's own git calls never read the clone's .git/config.
 pr_gh() { (cd "$work" && GH_TOKEN="$AGENT_PR_TOKEN" gh "$@"); }
 
+# status_label_ok LABEL: 0 when LABEL may be added to the issue now. The issue is read at the write,
+# not at intake: the labels workflow cleans up once, at the close, so a status label added to a
+# closed issue stays on it. A state that cannot be read adds the label with a warning, since an open
+# issue that silently loses agent-stuck hides a stopped run. It calls nothing that stops, so stop()
+# can use it.
+status_label_ok() {
+  local state
+  state=$(pr_gh issue view "$issue" --repo "$repo" --json state --jq .state) || state=""
+  case "$state" in
+    OPEN) ;;
+    CLOSED) echo "skipped: issue #$issue is closed, so $1 is not added"; return 1 ;;
+    *) echo "warning: could not read the state of issue #$issue, so $1 is added anyway" >&2 ;;
+  esac
+}
+
 # stop MESSAGE: the run stops at STAGE. It comments on the issue (and on the PR, once there) with
 # the message and the end of the last log, takes the run's labels off and adds agent-stuck. It
 # always exits 1; the calls here can fail without changing that. The message may hold text from the
@@ -166,7 +181,9 @@ stop() {
   if [[ -n "$pr" ]]; then pr_gh pr comment "$pr" --repo "$repo" --body-file "$body" >/dev/null || true; fi
   pr_gh issue edit "$issue" --repo "$repo" --remove-label ready-for-agent >/dev/null || true
   pr_gh issue edit "$issue" --repo "$repo" --remove-label agent-working >/dev/null || true
-  pr_gh issue edit "$issue" --repo "$repo" --add-label agent-stuck >/dev/null || true
+  if status_label_ok agent-stuck; then
+    pr_gh issue edit "$issue" --repo "$repo" --add-label agent-stuck >/dev/null || true
+  fi
   echo "stopped at the $stage stage: $reason" >&2
   exit 1
 }
@@ -547,8 +564,10 @@ ready() {
   pr_gh issue comment "$issue" --repo "$repo" --body "PR #$pr is ready for the owner: Qodo's latest review lists no open findings, and CI has passed." >/dev/null \
     || echo "warning: could not comment on issue #$issue" >&2
   pr_gh issue edit "$issue" --repo "$repo" --remove-label agent-working >/dev/null || true
-  pr_gh issue edit "$issue" --repo "$repo" --add-label agent-done >/dev/null \
-    || echo "warning: could not add agent-done to issue #$issue" >&2
+  if status_label_ok agent-done; then
+    pr_gh issue edit "$issue" --repo "$repo" --add-label agent-done >/dev/null \
+      || echo "warning: could not add agent-done to issue #$issue" >&2
+  fi
   echo "PR $pr is ready for the owner"
 }
 

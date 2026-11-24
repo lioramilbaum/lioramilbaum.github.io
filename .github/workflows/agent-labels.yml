@@ -1,0 +1,35 @@
+name: Agent labels
+
+# AGENTS.md Setup: when an issue closes, removes the agent run's labels (ready-for-agent,
+# agent-working, agent-stuck and agent-done) from it and leaves its other labels. scripts/agent-labels.sh
+# does the work with GITHUB_TOKEN, whose only permission is issues: write. Removing a label with
+# GITHUB_TOKEN starts no workflow, and agent-run.yml runs only on labeled, so this starts no run.
+# check-workflows.sh pins this file.
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  clear:
+    # This repository's issues, and never a pull request.
+    if: >-
+      github.repository == 'lioramilbaum/lioramilbaum.github.io' &&
+      !github.event.issue.pull_request
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        # No ref: main's tip, so the script is main's, not a closed PR's.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Remove the agent run's labels
+        shell: bash
+        env:
+          ISSUE: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/agent-labels.sh --issue "$ISSUE"

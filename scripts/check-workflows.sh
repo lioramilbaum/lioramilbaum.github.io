@@ -2,10 +2,11 @@
 # Parses the workflow files, checks the yearly deploy schedule, and checks who may write
 # statuses or run on pull_request_target (AGENTS.md rule 5): only qodo-findings.yml, whose
 # triggers, permissions and concurrency are pinned here. agent-run.yml (AGENTS.md Setup) is
-# pinned too: its trigger, guard, permissions and steps. Docker only, no network: the Ruby
-# runs in the jekyll-build-pages image that the build step pulls, so it uses the same YAML
-# library CI does. The image is amd64-only. --user keeps the container from writing as root;
-# the workflows and script mounts are read-only.
+# pinned too: its trigger, guard, permissions and steps, and so is agent-labels.yml (the label
+# removal on close): its trigger, guard, permissions, runner, timeout and two steps. Docker only,
+# no network: the Ruby runs in the jekyll-build-pages image that the build step pulls, so it uses
+# the same YAML library CI does. The image is amd64-only. --user keeps the container from writing
+# as root; the workflows and script mounts are read-only.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -43,6 +44,7 @@ abort "error: no workflow files found" if files.empty?
 report.call("qodo-findings.yml", "is missing; the qodo-findings status is not set") unless files.any? { |f| File.basename(f) == "qodo-findings.yml" }
 report.call("agent-run.yml", "is missing; the agent run is not pinned") unless files.any? { |f| File.basename(f) == "agent-run.yml" }
 report.call("delivery-doc.yml", "is missing; the Delivery doc workflow is not pinned") unless files.any? { |f| File.basename(f) == "delivery-doc.yml" }
+report.call("agent-labels.yml", "is missing; the label removal on close is not pinned") unless files.any? { |f| File.basename(f) == "agent-labels.yml" }
 
 files.each do |path|
   name = File.basename(path)
@@ -275,6 +277,45 @@ files.each do |path|
       end
       # Every uses: is a 40-character SHA with its # vX.Y.Z comment (AGENTS.md rule 5), read from the text,
       # since the comment is not in the parsed YAML.
+      uses_lines = text.scan(/^\s*(?:- )?uses: .*$/)
+      report.call(name, "job #{jid} has no uses: line") if uses_lines.empty?
+      report.call(name, "job #{jid} has a uses: that is not a 40-character SHA with a # vX.Y.Z comment") unless uses_lines.all? { |l| l.match?(%r{uses: actions/checkout@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*\z}) }
+    end
+  end
+
+  # agent-labels.yml removes the agent run's labels when an issue closes (AGENTS.md Setup). Its trigger, guard,
+  # permissions, runner, timeout and steps are pinned here; the job has no env, so GITHUB_TOKEN is its only credential.
+  if name == "agent-labels.yml"
+    text = File.read(path)
+    report.call(name, "on: is not exactly issues with types [closed]") unless on.is_a?(Hash) && on.keys == ["issues"] && on["issues"] == { "types" => ["closed"] }
+    report.call(name, "top-level permissions are not exactly issues: write") unless w["permissions"] == { "issues" => "write" }
+    report.call(name, "has a workflow-level env, defaults or concurrency; the job sets its own") if w.key?("env") || w.key?("defaults") || w.key?("concurrency")
+    report.call(name, "does not have exactly one job") unless jobs.size == 1
+    report.call(name, "secrets. appears in the file; this workflow takes no secret") if text.include?("secrets.")
+    jobs.each do |jid, job|
+      next report.call(name, "job #{jid} is not a mapping") unless job.is_a?(Hash)
+      report.call(name, "job #{jid} if is not exactly this repository's issues, not a pull request (&& !github.event.issue.pull_request)") unless job["if"].to_s.gsub(/\s+/, " ").strip == "github.repository == 'lioramilbaum/lioramilbaum.github.io' && !github.event.issue.pull_request"
+      report.call(name, "job #{jid} if has ||; the guard is only && terms") if job["if"].to_s.include?("||")
+      report.call(name, "job #{jid} runs-on is not ubuntu-26.04") unless job["runs-on"] == "ubuntu-26.04"
+      report.call(name, "job #{jid} timeout-minutes is not 5") unless job["timeout-minutes"] == 5
+      (job.keys - ["if", "runs-on", "timeout-minutes", "steps"]).each do |key|
+        report.call(name, "job #{jid} has key #{key}; only if, runs-on, timeout-minutes and steps are allowed")
+      end
+      steps = Array(job["steps"])
+      checkout = steps[0].is_a?(Hash) ? steps[0] : {}
+      label_step = steps[1].is_a?(Hash) ? steps[1] : {}
+      pinned = steps.size == 2 &&
+        checkout.keys.sort == ["name", "uses", "with"] && checkout["uses"].to_s.start_with?("actions/checkout@") &&
+        checkout["with"] == { "persist-credentials" => false } &&
+        label_step.keys.sort == ["env", "name", "run", "shell"] && label_step["shell"] == "bash" &&
+        label_step["run"] == 'bash scripts/agent-labels.sh --issue "$ISSUE"' &&
+        label_step["env"] == { "ISSUE" => "${{ github.event.issue.number }}", "GH_TOKEN" => "${{ github.token }}" }
+      report.call(name, "job #{jid} steps are not exactly checkout (persist-credentials false) and the label removal, in that order, with no other keys; the run step's env is exactly ISSUE and GH_TOKEN") unless pinned
+      steps.each do |s|
+        next unless s.is_a?(Hash)
+        report.call(name, "job #{jid} has a run: with an expression; pass it through env:") if s["run"].to_s.include?("${{")
+      end
+      # Every uses: is a 40-character SHA with its # vX.Y.Z comment (AGENTS.md rule 5), read from the text.
       uses_lines = text.scan(/^\s*(?:- )?uses: .*$/)
       report.call(name, "job #{jid} has no uses: line") if uses_lines.empty?
       report.call(name, "job #{jid} has a uses: that is not a 40-character SHA with a # vX.Y.Z comment") unless uses_lines.all? { |l| l.match?(%r{uses: actions/checkout@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*\z}) }
