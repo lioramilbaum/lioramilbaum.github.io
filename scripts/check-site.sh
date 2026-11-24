@@ -193,6 +193,7 @@ for u in \
   https://github.com/qodo-hackathon/software-factory-hackathon/discussions/13#discussioncomment-19655053 \
   https://github.com/qodo-hackathon/software-factory-hackathon/discussions/14#discussioncomment-19820008 \
   https://github.com/qodo-hackathon/software-factory-hackathon/discussions/15#discussioncomment-19859543 \
+  https://github.com/qodo-hackathon/software-factory-hackathon/discussions/16#discussioncomment-19864914 \
   https://github.com/lioramilbaum/lioramilbaum.github.io/blob/main/AGENTS.md \
   https://github.com/lioramilbaum/lioramilbaum.github.io/tree/main/deliveries; do
   grep -Fq "href=\"$u\"" "$hackathon" || fail "hackathon page link missing: $u" "$hackathon_md"
