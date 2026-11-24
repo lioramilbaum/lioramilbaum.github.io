@@ -4,16 +4,17 @@
 # a built page and prints "<code> <url>". Exits non-zero if any response is not 2xx.
 # The LinkedIn share-offsite URL is skipped: it redirects to a login page.
 #
-# Checks start in batches of 18 background jobs, in order: links first, then comment
+# Checks start in batches of 20 background jobs, in order: links first, then comment
 # lookups. Each batch waits for its slowest job before the next starts. A job takes at
 # most one link's retry budget (about 66 s), or about 200 s for a comment lookup (up to
 # 3 API pages, each with the same budget). So the worst case is the sum over batches.
-# This page has 20 links and 14 lookups (34 jobs): a batch of 18 links (66 s), then a
+# This page has 22 links and 14 lookups (36 jobs): a batch of 20 links (66 s), then a
 # batch of 2 links and 14 lookups (198 s), 264 s in all, inside CI's 5-minute step
 # timeout with 36 s to spare. That holds while the cap is between ceil(jobs/2) and the
 # number of links, so the first batch has links only. Each new day adds a link and a
-# lookup: Day 15 still fits (Day 15: 21 links + 15 lookups = 36 jobs = 2 x 18).
-# The Day 16 link (38 jobs) starts a third batch and takes the worst case past 300 s, so
+# lookup: Day 15 still fits (Day 15: 23 links + 15 lookups = 38 jobs: a batch of 20 links,
+# then 3 links and 15 lookups). Day 16 fits too (24 links + 16 lookups = 40 = 2 x 20).
+# The Day 17 link (42 jobs) starts a third batch and takes the worst case past 300 s, so
 # the budget must change before it is added. A cap above the number of links puts a
 # lookup in the first batch and gives two lookup batches (396 s).
 #
@@ -73,7 +74,7 @@ comment() {
 }
 
 # At most $cap checks run at once: every $cap-th job waits for the batch before it.
-cap=18
+cap=20
 n=0
 start() {
   n=$((n + 1))

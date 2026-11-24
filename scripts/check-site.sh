@@ -211,6 +211,51 @@ grep -Eq '<meta property="og:description" content="[^"]*[Hh]ackathon[^"]*">' "$h
 grep -Fq '<meta property="og:image" content="https://lioramilbaum.com/assets/images/profile.jpg">' "$hackathon" \
   || fail "hackathon og:image missing" "$hackathon_md"
 
+# How a change ships (issue #146): a section a link can target, with the six steps in order,
+# the diagram with its alt text, the three sub-sections, the "doesn't work yet" list and its links.
+how=$(sed -n '/<h2 id="how-a-change-ships">How a change ships<\/h2>/,/<h2/p' "$hackathon")
+[[ -n "$how" ]] || fail "hackathon page: How a change ships section missing (#how-a-change-ships)" "$hackathon_md"
+# The steps are the section's first numbered list (<ol>). A lead counts only as the bold opening of an item.
+steps=$(awk '/<ol>/{f=1} f{print} /<\/ol>/{if(f) exit}' <<<"$how")
+prev=0
+for lead in \
+  "A ticket with acceptance criteria. I write it." \
+  "A plan. I approve it." \
+  "Implement and review. Agents do this." \
+  "One commit, one pull request. CI and Qodo check it." \
+  "The approval workflow. Qodo runs it." \
+  "Merge. I press the button."; do
+  line=$(grep -nF -- "<li><strong>$lead</strong>" <<<"$steps" | head -1 | cut -d: -f1 || true)
+  [[ -n "$line" ]] || fail "hackathon page: How a change ships step not an item of the numbered list: $lead" "$hackathon_md"
+  (( line > prev )) || fail "hackathon page: How a change ships steps are out of order at: $lead" "$hackathon_md"
+  prev=$line
+done
+grep -Fq 'I decide at three points.' <<<"$how" \
+  || fail "hackathon page: How a change ships lacks the line 'I decide at three points.'" "$hackathon_md"
+img=$(grep -Eo '<img [^>]*how-a-change-ships\.png[^>]*>' <<<"$how" || true)
+[[ -n "$img" ]] || fail "hackathon page: How a change ships diagram image missing from the section" "$hackathon_md"
+grep -Fq 'src="/assets/images/how-a-change-ships.png"' <<<"$img" \
+  || fail "hackathon page: diagram image src is not /assets/images/how-a-change-ships.png" "$hackathon_md"
+grep -Fq 'alt="Diagram of the six steps listed below. The three where I decide, steps 1, 2 and 6, are outlined in amber."' <<<"$img" \
+  || fail "hackathon page: diagram alt text is not the expected text" "$hackathon_md"
+img_line=$(grep -n 'how-a-change-ships\.png' <<<"$how" | head -1 | cut -d: -f1 || true)
+ol_line=$(grep -n '<ol>' <<<"$how" | head -1 | cut -d: -f1 || true)
+(( img_line < ol_line )) || fail "hackathon page: the diagram must come before the list of steps" "$hackathon_md"
+diagram="$site/assets/images/how-a-change-ships.png"
+test -f "$diagram" || fail "diagram image not built: $diagram" "$hackathon_md"
+(( $(wc -c < "$diagram") <= 307200 )) || fail "diagram image is larger than 300 KB: $diagram" "$hackathon_md"
+for id in this-weeks-catch the-lesson-i-keep-relearning what-doesnt-work-yet; do
+  grep -Fq "<h3 id=\"$id\"" <<<"$how" || fail "hackathon page: How a change ships lacks sub-heading #$id" "$hackathon_md"
+done
+doesnt=$(sed -n '/<h3 id="what-doesnt-work-yet"/,$p' <<<"$how")
+items=$(grep -c '<li>' <<<"$doesnt" || true)
+(( items >= 3 )) || fail "hackathon page: What doesn't work yet lists $items items; it needs at least 3" "$hackathon_md"
+for u in \
+  https://github.com/lioramilbaum/lioramilbaum.github.io/pull/138 \
+  https://github.com/lioramilbaum/lioramilbaum.github.io/issues/67; do
+  grep -Fq "href=\"$u\"" <<<"$how" || fail "hackathon page: How a change ships link missing: $u" "$hackathon_md"
+done
+
 share='https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Flioramilbaum.com%2Fdocs%2Fqodo-software-factory-hackathon%2F'
 # Assumes the anchor sits on one line, which _layouts/docs.html keeps on purpose.
 share_anchor=$(grep -o '<a [^>]*share-offsite[^>]*>.*</a>' "$hackathon" || true)
