@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Tests for the agent runner (AGENTS.md Setup, the agent run): scripts/agent-run.sh, and the
-# argument of scripts/build-site.sh it relies on. Offline: no network, no Docker, no model. Each
-# case builds a throwaway upstream, fork and clone around the real runner, prompt, build wrapper
-# and check-site.yml. docker, gh, claude, the checks, qodo-status.sh and git's push are stubs on
-# PATH or fixtures, and sleep is a no-op. The docker stub runs what a container would run, with only
-# the -e variables in its environment (the build and the checks use docker; the model does not).
-# The claude stub is run with the environment the runner gives it (env -i) and its own HOME, so a
-# case's fixture directory is kept in the stub itself (setup_repos writes it in). Prints one ok or
-# FAIL line per case and exits 1 if any case fails. The runner itself is copied from this checkout,
-# so a broken or missing runner fails the cases that need it.
+# Tests for the agent runner (AGENTS.md Setup, the agent run): scripts/agent-run.sh, the label
+# removal on close (scripts/agent-labels.sh), and the argument of scripts/build-site.sh it relies
+# on. Offline: no network, no Docker, no model. Each case builds a throwaway upstream, fork and
+# clone around the real runner, prompt, build wrapper and check-site.yml. docker, gh, claude, the
+# checks, qodo-status.sh and git's push are stubs on PATH or fixtures, and sleep is a no-op. The
+# docker stub runs what a container would run, with only the -e variables in its environment (the
+# build and the checks use docker; the model does not). The claude stub is run with the environment
+# the runner gives it (env -i) and its own HOME, so a case's fixture directory is kept in the stub
+# itself (setup_repos writes it in). Prints one ok or FAIL line per case and exits 1 if any case
+# fails. The runner itself is copied from this checkout, so a broken or missing runner fails the
+# cases that need it.
 set -euo pipefail
 unset GITHUB_ACTIONS
 
@@ -62,6 +63,7 @@ cat > "$bin/gh" <<'STUB'
 set -euo pipefail
 fx=$HOME
 echo "$* [token=${GH_TOKEN:-unset}] [cwd=$(pwd -P)]" >> "$fx/gh-calls.log"
+{ printf '[%s]' "$@"; echo; } >> "$fx/gh-argv.log"
 if [ -e "$fx/gh-fail-match" ] && [[ "$*" == *"$(cat "$fx/gh-fail-match")"* ]]; then echo "gh: simulated failure" >&2; exit 1; fi
 if [ -e "$fx/gh-fail-$1-$2" ]; then echo "gh: simulated failure" >&2; exit 1; fi
 if [ -e "$fx/gh-raw-$1-$2" ]; then cat "$fx/gh-raw-$1-$2"; exit 0; fi
@@ -79,7 +81,12 @@ for arg in "$@"; do
   prev=$arg
 done
 case "$1 $2" in
-  "issue view") src=$fx/issue.json ;;
+  "issue view")
+    # A state-only read (the runner's check before a status label) serves state-late.json when the
+    # case has one: the issue closed after intake, which reads the whole issue.
+    src=$fx/issue.json
+    if [[ " $* " == *" --json state --jq "* && -e "$fx/state-late.json" ]]; then src=$fx/state-late.json; fi
+    ;;
   "pr list") src=$fx/pr-list.json ;;
   "api graphql")
     # The page the cursor names (-f after=CURSOR), when the case has that page; the first page otherwise.
@@ -880,6 +887,62 @@ case_closed_issue() {
   need_not test -e "$fx/claude-count"
 }
 
+# The issue closes after intake: the run's state read before a status label sees CLOSED. The stop
+# path is a CI failure (the run has the PR and a stop comment); the ready path is a green run.
+case_closed_after_intake_stop() {
+  new_case
+  printf '[{"name":"check-site","bucket":"fail"}]\n' > "$fx/pr-checks.json"
+  printf '{"state":"CLOSED"}\n' > "$fx/state-late.json"
+  run_runner 41
+  need test "$rc_runner" -ne 0
+  need grep -q 'stopped at the ci stage' "$fx"/body-*.md
+  need_not grep -qF -- '--add-label agent-stuck' "$fx/gh-calls.log"
+  need grep -qF -- '--remove-label agent-working' "$fx/gh-calls.log"
+  need grep -qF -- '--remove-label ready-for-agent' "$fx/gh-calls.log"
+  need grep -qF "skipped: issue #41 is closed, so agent-stuck is not added" "$fx/runner.log"
+}
+
+case_closed_after_intake_ready() {
+  new_case
+  printf '{"state":"CLOSED"}\n' > "$fx/state-late.json"
+  run_runner 41
+  need test "$rc_runner" -eq 0
+  need_not grep -qF -- '--add-label agent-done' "$fx/gh-calls.log"
+  need grep -qF -- '--remove-label agent-working' "$fx/gh-calls.log"
+  need grep -qF "skipped: issue #41 is closed, so agent-done is not added" "$fx/runner.log"
+}
+
+# The state cannot be read on a status label's path (gh fails, or returns a state the runner does not
+# know): the label is still added, with a warning, so an open issue never loses its status silently.
+case_state_unreadable_stop() {
+  new_case
+  printf '[{"name":"check-site","bucket":"fail"}]\n' > "$fx/pr-checks.json"
+  printf '%s\n' '--json state --jq' > "$fx/gh-fail-match"
+  run_runner 41
+  need test "$rc_runner" -ne 0
+  need grep -qF "warning: could not read the state of issue #41, so agent-stuck is added anyway" "$fx/runner.log"
+  need grep -qF -- '--add-label agent-stuck' "$fx/gh-calls.log"
+}
+
+case_state_unreadable_ready() {
+  new_case
+  printf '%s\n' '--json state --jq' > "$fx/gh-fail-match"
+  run_runner 41
+  need test "$rc_runner" -eq 0
+  need grep -qF "warning: could not read the state of issue #41, so agent-done is added anyway" "$fx/runner.log"
+  need grep -qF -- '--add-label agent-done' "$fx/gh-calls.log"
+}
+
+case_state_unknown_stop() {
+  new_case
+  printf '[{"name":"check-site","bucket":"fail"}]\n' > "$fx/pr-checks.json"
+  printf '{"state":"ODD"}\n' > "$fx/state-late.json"
+  run_runner 41
+  need test "$rc_runner" -ne 0
+  need grep -qF "warning: could not read the state of issue #41, so agent-stuck is added anyway" "$fx/runner.log"
+  need grep -qF -- '--add-label agent-stuck' "$fx/gh-calls.log"
+}
+
 # case_tool_missing TOOL: the runner stops before any step when TOOL is not on its PATH.
 case_tool_missing() {
   new_case
@@ -1179,6 +1242,109 @@ case_build_site_argument() {
   need_not grep -q 'v9\.9\.9' "$fx/docker-1.argv"
 }
 
+# run_labels ARGS...: runs scripts/agent-labels.sh with the gh stub in the case's fixture directory (its
+# output in labels.log). Sets rc_labels.
+run_labels() {
+  set +e
+  env PATH="$bin:$PATH" HOME="$fx" GH_TOKEN=test-token "$bash_bin" "$root/scripts/agent-labels.sh" "$@" \
+    > "$fx/labels.log" 2>&1
+  rc_labels=$?
+  set -e
+  sed 's/^/  labels: /' "$fx/labels.log" >&2
+}
+
+# labels_edit_argv: the argv of the issue edit call, one bracketed field per argument (gh-argv.log),
+# so a label with a space is one field. The view call's argv is in the same log; this picks the edit.
+labels_edit_argv='[issue][edit][64][--repo][lioramilbaum/lioramilbaum.github.io]'
+
+# need_labels_refused MESSAGE: the run exited non-zero, printed MESSAGE, and called no gh command.
+need_labels_refused() {
+  need test "$rc_labels" -ne 0
+  need grep -qF -- "$1" "$fx/labels.log"
+  need_not test -e "$fx/gh-calls.log"
+}
+
+# The label script removes its four labels in this order (agent-labels.sh's loop).
+case_labels_remove_agent() {
+  new_case
+  issue_fixture "Footer year is stale" "$std_body" '[{"name":"agent-stuck"},{"name":"agent-done"},{"name":"agent-working-x"},{"name":"bug"}]'
+  run_labels --issue 64
+  need test "$rc_labels" -eq 0
+  need test "$(grep -c '^issue edit ' "$fx/gh-calls.log")" -eq 1
+  need grep -qxF -- "${labels_edit_argv}[--remove-label][agent-stuck][--remove-label][agent-done]" "$fx/gh-argv.log"
+  need grep -qF 'removed: agent-stuck agent-done from issue #64' "$fx/labels.log"
+}
+
+case_labels_remove_all_four() {
+  new_case
+  issue_fixture "Footer year is stale" "$std_body" '[{"name":"agent-done-old"},{"name":"ready-for-agent"},{"name":"needs agent-stuck"},{"name":"agent-working"},{"name":"agent-stuck"},{"name":"a.b"},{"name":"agent-done"},{"name":"bug"}]'
+  run_labels --issue 64
+  need test "$rc_labels" -eq 0
+  need test "$(grep -c '^issue edit ' "$fx/gh-calls.log")" -eq 1
+  need grep -qxF -- "${labels_edit_argv}[--remove-label][ready-for-agent][--remove-label][agent-working][--remove-label][agent-stuck][--remove-label][agent-done]" "$fx/gh-argv.log"
+  need grep -qF 'removed: ready-for-agent agent-working agent-stuck agent-done from issue #64' "$fx/labels.log"
+}
+
+case_labels_only_decoys() {
+  new_case
+  issue_fixture "Footer year is stale" "$std_body" '[{"name":"agent-done-old"},{"name":"not-agent-stuck"},{"name":"needs agent-stuck"},{"name":"a.b"}]'
+  run_labels --issue 64
+  need test "$rc_labels" -eq 0
+  need grep -qF 'skipped: issue #64 has none of the agent run' "$fx/labels.log"
+  need_not grep -q '^issue edit ' "$fx/gh-calls.log"
+}
+
+case_labels_none_present() {
+  new_case
+  for labels in '[]' '[{"name":"bug"}]'; do
+    issue_fixture "Footer year is stale" "$std_body" "$labels"
+    run_labels --issue 64
+    need test "$rc_labels" -eq 0
+    need grep -qF 'skipped: issue #64 has none of the agent run' "$fx/labels.log"
+    need_not grep -q '^issue edit ' "$fx/gh-calls.log"
+  done
+}
+
+case_labels_read_fails() {
+  new_case
+  : > "$fx/gh-fail-issue-view"
+  run_labels --issue 64
+  need test "$rc_labels" -ne 0
+  need grep -qF 'could not read the labels of issue #64' "$fx/labels.log"
+  need_not grep -q '^issue edit ' "$fx/gh-calls.log"
+}
+
+case_labels_remove_fails() {
+  new_case
+  issue_fixture "Footer year is stale" "$std_body" '[{"name":"agent-stuck"}]'
+  : > "$fx/gh-fail-issue-edit"
+  run_labels --issue 64
+  need test "$rc_labels" -ne 0
+  need grep -qF 'could not remove agent-stuck from issue #64' "$fx/labels.log"
+}
+
+# The argument branches that print usage: no arguments, --issue with no value, extra arguments, another flag.
+case_labels_usage() {
+  new_case
+  run_labels
+  need_labels_refused 'usage: scripts/agent-labels.sh --issue N'
+  run_labels --issue
+  need_labels_refused 'usage: scripts/agent-labels.sh --issue N'
+  run_labels --issue 1 extra
+  need_labels_refused 'usage: scripts/agent-labels.sh --issue N'
+  run_labels --pr 1
+  need_labels_refused 'usage: scripts/agent-labels.sh --issue N'
+}
+
+# The issue number must be a positive integer without leading zeros: letters, zero, a leading zero and a sign.
+case_labels_bad_number() {
+  new_case
+  for number in abc 0 007 -5; do
+    run_labels --issue "$number"
+    need_labels_refused "--issue must be a positive issue number, got: $number"
+  done
+}
+
 # case_step_fails MARKER EXPECTED [QODO_PLAN]: the file MARKER in the fixture directory makes one
 # git or gh step fail (see the stubs); the run stops there, saying EXPECTED.
 case_step_fails() {
@@ -1275,6 +1441,11 @@ run_case "u: an unexpected failure still gets the stop comment and label" case_u
 
 run_case "v: the usage errors stop before any call" case_usage
 run_case "v: a closed issue stops before the model" case_closed_issue
+run_case "v: an issue that closes during the run gets no agent-stuck, the stop still removes the run's labels" case_closed_after_intake_stop
+run_case "v: an issue that closes during the run gets no agent-done" case_closed_after_intake_ready
+run_case "v: an unreadable state on the stop path adds agent-stuck with a warning" case_state_unreadable_stop
+run_case "v: an unreadable state on the ready path adds agent-done with a warning" case_state_unreadable_ready
+run_case "v: an unknown state on the stop path adds agent-stuck with a warning" case_state_unknown_stop
 run_case "w: git cannot fetch main, stop" case_step_fails git-fail-fetch "could not fetch main from origin"
 run_case "w: git cannot read main, stop" case_step_fails git-fail-rev-parse "could not read main from origin"
 run_case "w: git cannot list the fork's branches, stop" case_step_fails git-fail-ls-remote "could not read the branches of the fork"
@@ -1327,6 +1498,15 @@ run_case "z: gh's checks output that is not JSON stops" case_ci_unreadable
 run_case "z: gh cannot list the checks, the run waits and stops" case_step_fails gh-fail-pr-checks "waiting for CI"
 run_case "z: build-site.sh with no argument builds its own checkout" case_build_site_default
 run_case "z: build-site.sh with an argument builds that directory, with its own checkout's image" case_build_site_argument
+
+run_case "labels: closing an issue removes the agent run's labels, others stay" case_labels_remove_agent
+run_case "labels: all four agent labels go in one edit, decoys that contain their text stay" case_labels_remove_all_four
+run_case "labels: only decoys that contain an agent label's text, nothing is removed" case_labels_only_decoys
+run_case "labels: an issue with none of the four labels changes nothing" case_labels_none_present
+run_case "labels: gh cannot read the labels, stop" case_labels_read_fails
+run_case "labels: gh cannot remove the labels, stop" case_labels_remove_fails
+run_case "labels: no arguments, --issue with no value, extra arguments or another flag print the usage" case_labels_usage
+run_case "labels: an issue number that is not a positive integer stops before gh" case_labels_bad_number
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures agent test case(s) failed" >&2
