@@ -499,6 +499,8 @@ qodo_loop() {
       0) return 0 ;;
       unknown)
         stop "Qodo's review lists findings in a layout scripts/qodo-review.awk does not know (open: unknown). The owner decides whether it needs a change (AGENTS.md rule 9)." ;;
+      skipped)
+        stop "Qodo skipped the review of the head as trivial, so the head was not reviewed. The owner decides: ask Qodo for a review, or merge knowing." ;;
       '' | *[!0-9]*) stop "qodo-status.sh reported no open count: $open" ;;
     esac
     if [[ $round -ge $qodo_rounds ]]; then

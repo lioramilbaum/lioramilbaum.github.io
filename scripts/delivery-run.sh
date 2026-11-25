@@ -493,6 +493,7 @@ ASKPASS
   # qodo-open (AGENTS.md rule 9): 0 is clear, a positive count is a finding the doc records and the docs PR
   # names. none and other mean the generator read a review that is not the settled one the status waited
   # for, so nothing is committed. unknown is a review the generator cannot read, also nothing committed.
+  # skipped is a review Qodo skipped as trivial: the doc is committed, and the run warns that the head was not reviewed.
   case "$qodo_open" in
     0) ;;
     none | other)
@@ -502,6 +503,9 @@ ASKPASS
     unknown)
       restore_docs
       die "$name records qodo-open unknown: Qodo's final review has no finding the generator can parse, and not every group says it is clear. The owner decides whether scripts/qodo-review.awk needs a change (AGENTS.md rule 9). Nothing is committed or pushed."
+      ;;
+    skipped)
+      warn "PR #$n's final Qodo review was skipped as trivial, so the head was not reviewed; $name records qodo-open skipped (AGENTS.md rule 9)"
       ;;
     *)
       if [[ ! "$qodo_open" =~ ^[1-9][0-9]*$ ]]; then

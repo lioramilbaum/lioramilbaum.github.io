@@ -5,6 +5,11 @@
 # has settled. Renovate PRs get success (exempt). Runs from main (.github/workflows/
 # qodo-findings.yml), so PR code never runs here: the PR's commits are read as objects only.
 #
+# A review Qodo skipped as trivial (qodo-status.sh's open: skipped) is success on a docs PR that
+# changes only files under deliveries/ (not deliveries/TEMPLATE.md), and pending on any other PR
+# (AGENTS.md rule 9). That case reads the PR's changed files, checks the list is whole against the
+# PR's changed-file count, and posts nothing if the head changed during the checks.
+#
 # Usage: scripts/qodo-gate.sh --pr N [--fetch REMOTE]
 #   --fetch REMOTE  passed to qodo-status.sh, which fetches a commit this clone lacks.
 #
@@ -113,6 +118,51 @@ case "$rc" in
       0) post "$head" success "Qodo's latest review of this head lists no open findings" "$(target_url "$out")" ;;
       unknown) post "$head" failure "Qodo's review could not be read; update scripts/qodo-review.awk (AGENTS.md rule 9)" \
         "$(target_url "$out")" ;;
+      skipped)
+        # Qodo skipped the review as trivial, so the head was not reviewed. A docs PR (only
+        # deliveries/ changes, and not the template) is success: its generated docs are checked on
+        # the merged head. The template is not checked anywhere, so it is not docs here. The list
+        # is whole only if it has as many files as the PR's changed_files (pulls/N/files caps at
+        # 3,000). Any other PR is pending until the owner asks for a review or merges knowing.
+        files_rc=0
+        files=$(gh api "repos/$repo/pulls/$pr/files" --paginate \
+          --jq '.[] | [.filename, (.previous_filename // "")] | @tsv') || files_rc=$?
+        if [[ "$files_rc" -ne 0 || -z "$files" ]]; then
+          post "$SHA" error "Could not list this PR's changed files; see the workflow run" "$(run_url)"
+          exit 1
+        fi
+        # One line per file in $files; $paths has one line per path (a rename's old path too).
+        paths=$(awk -F'\t' '{ for (i = 1; i <= NF; i++) if ($i != "") print $i }' <<< "$files")
+        nfiles=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
+        count_rc=0
+        changed=$(gh api "repos/$repo/pulls/$pr" --jq .changed_files) || count_rc=$?
+        if [[ "$count_rc" -ne 0 ]]; then
+          post "$SHA" error "Could not read this PR's changed-file count; see the workflow run" "$(run_url)"
+          exit 1
+        fi
+        outcome=success
+        reason="Qodo skipped the review as trivial; this docs PR changes only deliveries/ (AGENTS.md rule 9)"
+        if grep -qv '^deliveries/' <<< "$paths" || grep -qx 'deliveries/TEMPLATE.md' <<< "$paths"; then
+          outcome=pending
+          reason="Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)"
+        elif ! [[ "$changed" =~ ^[0-9]+$ ]] || [[ "$changed" -ne "$nfiles" ]]; then
+          outcome=pending
+          reason="Qodo skipped the review as trivial and the PR's file list is incomplete; ask Qodo for a review (AGENTS.md rule 9)"
+        fi
+        # The head the status goes on must still be the PR's head. A push during the checks above
+        # is posted by its own gate run, so nothing is posted here (rule 11: say so, and why).
+        now_rc=0
+        now_head=$(gh api "repos/$repo/pulls/$pr" --jq .head.sha) || now_rc=$?
+        if [[ "$now_rc" -ne 0 ]] || ! [[ "$now_head" =~ ^[0-9a-f]{40}$ ]]; then
+          post "$SHA" error "Could not read this PR's head; see the workflow run" "$(run_url)"
+          exit 1
+        fi
+        if [[ "$now_head" != "$head" ]]; then
+          echo "skipped the status: the head changed during the check (${head:0:7} to ${now_head:0:7}); the push's own gate run decides"
+          exit 0
+        fi
+        post "$head" "$outcome" "$reason" "$(target_url "$out")"
+        ;;
       ''|*[!0-9]*) die "qodo-status.sh reported open: $open" ;;
       *) post "$head" failure "Qodo lists $open open finding(s); fix or dismiss each (AGENTS.md rule 9)" \
         "$(target_url "$out")" ;;

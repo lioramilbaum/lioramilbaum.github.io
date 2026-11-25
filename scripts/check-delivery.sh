@@ -121,13 +121,14 @@ check_doc() {
 
   # Qodo's final review is recorded, not gated: the qodo-findings status gated the merge (rule 9).
   qodo=$(printf '%s\n' "$meta" \
-    | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} .* qodo-open=(none|other|unknown|[0-9]+) -->$/\1/p')
+    | sed -nE 's/^<!-- delivery: content=[0-9a-f]{40} .* qodo-open=(none|other|unknown|skipped|[0-9]+) -->$/\1/p')
   case "$qodo" in
     0) echo "$doc: ok (content $want, merged head $head, no open Qodo findings)"; return 0 ;;
     "") fail "$doc" "the doc records no Qodo state; regenerate it (AGENTS.md rule 9)" ;;
     none) say warning "$doc" "Qodo had not reviewed the PR when the doc was generated (AGENTS.md rule 9)" ;;
     other) say warning "$doc" "Qodo's final review was of other content than the merged head (AGENTS.md rule 9)" ;;
     unknown) say warning "$doc" "Qodo's final review could not be read: it has no finding the generator can parse, and not every group says it is clear; a new layout belongs in scripts/qodo-review.awk (AGENTS.md rule 9)" ;;
+    skipped) say warning "$doc" "Qodo skipped its final review of the merged head as trivial, so the head was not reviewed (AGENTS.md rule 9)" ;;
     *) say warning "$doc" "Qodo's final review listed $qodo open finding(s) (AGENTS.md rule 9)" ;;
   esac
   echo "$doc: ok (content $want, merged head $head, qodo-open $qodo)"

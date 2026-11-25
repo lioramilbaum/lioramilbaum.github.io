@@ -21,8 +21,9 @@
 #                 compared with the head's)
 #
 # open: how many findings Qodo's latest review lists, read by scripts/qodo-review.awk (the
-# layout parser, AGENTS.md rule 9): a number, 0 when the review is clear, unknown when its
-# layout is one the parser does not know, none when there is no review.
+# layout parser, AGENTS.md rule 9): a number, 0 when the review is clear, skipped when Qodo
+# skipped the review as trivial (so the head was not reviewed), unknown when its layout is one
+# the parser does not know, none when there is no review.
 #
 # The review is the latest comment by qodo-code-review or qodo-code-review[bot] (exact logins),
 # whose body contains "Code Review by Qodo". It names the commit it reviewed in its marker
@@ -176,7 +177,8 @@ else
     | "$awk" -F'\t' '
         $1 == "F" && !($4 in seen) { seen[$4] = 1; n++ }
         $1 == "C" { cl = 1 }
-        END { if (n > 0) print n; else if (cl) print 0; else print "unknown" }')
+        $1 == "S" { sk = 1 }
+        END { if (n > 0) print n; else if (cl) print 0; else if (sk) print "skipped"; else print "unknown" }')
 
   reviewed=none; matches=no; status=no-review
   if [[ -n "$qodo_sha" ]]; then
