@@ -144,6 +144,11 @@ case "$1 $2" in
     echo "$n" > "$GH_FIXTURES/pulls-calls"
     fixture=$GH_FIXTURES/pulls-$n.json
     [ -e "$fixture" ] || fixture=$GH_FIXTURES/pulls.json ;;
+  "api repos/"*"/pulls/"*"/files")
+    # The PR's changed files (the qodo-gate cases): pr-files.json, a list of {filename, previous_filename};
+    # pr-files.fail makes the call fail.
+    if [ -e "$GH_FIXTURES/pr-files.fail" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+    fixture=$GH_FIXTURES/pr-files.json ;;
   "api repos/"*"/pulls/"*)
     if [ -e "$GH_FIXTURES/gh-fail-pulls" ]; then echo "gh: simulated failure" >&2; exit 1; fi
     # pull-N.json is PR N's pulls read; pull-N.404 and pull-N.500 make it fail (a missing PR, another error).
@@ -151,7 +156,14 @@ case "$1 $2" in
     if [ -e "$GH_FIXTURES/pull-$num.404" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     if [ -e "$GH_FIXTURES/pull-$num.500" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
     fixture=$GH_FIXTURES/pull.json
-    if [ -e "$GH_FIXTURES/pull-$num.json" ]; then fixture=$GH_FIXTURES/pull-$num.json; fi ;;
+    if [ -e "$GH_FIXTURES/pull-$num.json" ]; then fixture=$GH_FIXTURES/pull-$num.json; fi
+    # pull-N-read-K.json (or pull-N-read-K.fail) answers the K-th pulls read of PR N in the case (the
+    # qodo-gate skipped cases: the changed-file count is read 2nd, the head again 3rd).
+    k=$(cat "$GH_FIXTURES/pull-$num-calls" 2>/dev/null || echo 0)
+    k=$((k + 1))
+    echo "$k" > "$GH_FIXTURES/pull-$num-calls"
+    if [ -e "$GH_FIXTURES/pull-$num-read-$k.fail" ]; then echo "gh: simulated failure" >&2; exit 1; fi
+    if [ -e "$GH_FIXTURES/pull-$num-read-$k.json" ]; then fixture=$GH_FIXTURES/pull-$num-read-$k.json; fi ;;
   "api repos/"*"/statuses/"*)
     if [ -e "$GH_FIXTURES/gh-fail-status" ]; then echo "gh: simulated failure" >&2; exit 1; fi
     fixture=$GH_FIXTURES/status-reply.json ;;
@@ -517,6 +529,12 @@ fx_qodo_none() {
 fx_qodo_clear() {
   review_clear "$1" > "$FX/review-clear.md"
   fx_qodo "$FX/review-clear.md"
+}
+
+# skipped_review_for HEAD OUT: PR 148's skipped review (test-fixtures/qodo-skipped-pr148.md), with
+# its commit marker set to HEAD, as Qodo's comment for that head.
+skipped_review_for() {
+  sed "s/e950c4e13abfa7cde39dd3f18f195a8fcc253b95/$1/" "$root/scripts/test-fixtures/qodo-skipped-pr148.md" > "$2"
 }
 
 # fx_qodo_pair BODY_A AT_A BODY_B AT_B: two Qodo comments on one page, A listed first (ids
@@ -1157,6 +1175,25 @@ if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=unknown -->' "$CASE/$doc_name" \
   report "qou. a clear-less review with no known finding layout: the doc records unknown and check warns" 0
 else
   report "qou. a clear-less review with no known finding layout: the doc records unknown and check warns" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
+fi
+
+# qos. Qodo's latest review of the head is the skipped layout (PR 148's, judged trivial): the doc
+# records skipped and says the head was not reviewed, and the docs check passes with a ::warning
+# (AGENTS.md rule 9). No finding is counted as zero here.
+pr_case qos other plain
+h1=$(head_sha)
+skipped_review_for "$h1" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+gen "$CASE"
+commit_all "delivery doc"
+check "$CASE" "" 1
+if [ "$GEN_RC" -eq 0 ] && grep -qF 'qodo-open=skipped -->' "$CASE/$doc_name" \
+  && grep -qF "Qodo skipped its final review of the merged head as trivial, so the head was not reviewed." "$CASE/$doc_name" \
+  && ! grep -qF "lists no findings." "$CASE/$doc_name" \
+  && [ "$CHECK_RC" -eq 0 ] && grep -q '::warning' "$FX/check.log" && grep -q 'skipped its final review' "$FX/check.log"; then
+  report "qos. a skipped final review: the doc records skipped and says so; check passes with a warning" 0
+else
+  report "qos. a skipped final review: the doc records skipped and says so; check passes with a warning" 1 "gen $GEN_RC: $(cat "$FX/gen.log") check $CHECK_RC: $(cat "$FX/check.log")"
 fi
 
 # qoh. The High group holds a finding block that no parse reads and has no clear line, while the
@@ -2281,6 +2318,61 @@ else
   report "qs28. --fetch and the head is option-shaped: error, exit 1, no fetch runs" 1 "rc $QSTAT_RC ran $([ -e "$qs28_ran" ] && echo yes || echo no): $(cat "$FX/qs.err")"
 fi
 
+# qs29. Qodo skipped its review of the head as trivial (PR 148's layout): the review names the head
+# and is quiet, so it is settled, and open reads skipped, not 0 and not unknown.
+pr_case qs29 other plain
+qs_setup
+h1=$(head_sha)
+skipped_review_for "$h1" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+qstat "$CASE" "$qs_now" --pr 24
+qs29_want=$(cat <<EOF
+head: $h1
+review: $qs_review
+reviewed: $h1
+matches-head: yes
+last-change: 2026-11-05T15:50:27Z
+quiet: yes (72573s since last change, need 300s)
+open: skipped
+status: settled
+EOF
+)
+if [ "$QSTAT_RC" -eq 0 ] && qstat_is "$qs29_want"; then
+  report "qs29. a skipped review (PR 148's layout) of the head: open skipped, settled, exit 0" 0
+else
+  report "qs29. a skipped review (PR 148's layout) of the head: open skipped, settled, exit 0" 1 "rc $QSTAT_RC: $(cat "$FX/qs.out") $(cat "$FX/qs.err")"
+fi
+
+# qs30. The skip sentence with a group opener (a Medium badge, with no clear line): the layout is
+# not one the parser reads as skipped, so open is unknown, never skipped.
+pr_case qs30 other plain
+qs_setup
+h1=$(head_sha)
+skipped_review_for "$h1" "$FX/review-skip.md"
+printf '<img src="https://img.shields.io/badge/Medium-634FD1?style=flat-square" height="20px" alt="Remediation recommended">\n' >> "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+qstat "$CASE" "$qs_now" --pr 24
+if [ "$QSTAT_RC" -eq 0 ] && grep -qxF 'open: unknown' "$FX/qs.out" && ! grep -qxF 'open: skipped' "$FX/qs.out"; then
+  report "qs30. the skip sentence with a group opener: open unknown, never skipped" 0
+else
+  report "qs30. the skip sentence with a group opener: open unknown, never skipped" 1 "rc $QSTAT_RC: $(cat "$FX/qs.out") $(cat "$FX/qs.err")"
+fi
+
+# qs31. The skip sentence with no "No findings to report" heading (the heading half of the skip
+# condition): the layout is not one the parser reads as skipped, so open is unknown, never skipped.
+pr_case qs31 other plain
+qs_setup
+h1=$(head_sha)
+skipped_review_for "$h1" "$FX/review-skip.md"
+sed '/No findings to report/d' "$FX/review-skip.md" > "$FX/review-skip-noheading.md"
+fx_qodo "$FX/review-skip-noheading.md"
+qstat "$CASE" "$qs_now" --pr 24
+if [ "$QSTAT_RC" -eq 0 ] && grep -qxF 'open: unknown' "$FX/qs.out" && grep -qxF 'status: settled' "$FX/qs.out" && ! grep -qxF 'open: skipped' "$FX/qs.out"; then
+  report "qs31. the skip sentence with no No-findings heading: open unknown, settled, never skipped" 0
+else
+  report "qs31. the skip sentence with no No-findings heading: open unknown, settled, never skipped" 1 "rc $QSTAT_RC: $(cat "$FX/qs.out") $(cat "$FX/qs.err")"
+fi
+
 # qodo-gate.sh (AGENTS.md rule 9). Each gate case asserts the exact POST it makes, or that it makes
 # none. The gate's clock is the case's $FX/clock (the date stub), or QODO_STATUS_NOW when a case
 # sets GATE_QSN.
@@ -2295,10 +2387,11 @@ gate_setup() {
   echo '{}' > "$FX/status-reply.json"
 }
 
-# fx_pull STATE DRAFT LOGIN: the PR as the REST API reports it, its head at the case's head.
+# fx_pull STATE DRAFT LOGIN [CHANGED]: the PR as the REST API reports it, its head at the case's head,
+# and its changed_files (CHANGED, default 1).
 fx_pull() {
-  jq -n --arg state "$1" --argjson draft "$2" --arg login "$3" --arg sha "$(head_sha)" \
-    '{state: $state, draft: $draft, user: {login: $login}, head: {sha: $sha}}' > "$FX/pull.json"
+  jq -n --arg state "$1" --argjson draft "$2" --arg login "$3" --arg sha "$(head_sha)" --argjson changed "${4:-1}" \
+    '{state: $state, draft: $draft, user: {login: $login}, head: {sha: $sha}, changed_files: $changed}' > "$FX/pull.json"
 }
 
 # gate CASE NOW [ARGS]: runs scripts/qodo-gate.sh in CASE with the stubs and the clock at NOW.
@@ -2573,6 +2666,235 @@ if [ "$g16a_ok" -eq 1 ] && [ "$GATE_RC" -eq 1 ] && [ -z "$(gate_posts)" ] && gre
   report "g16. the PR cannot be read, or its head is not a SHA: exit 1, no POST" 0
 else
   report "g16. the PR cannot be read, or its head is not a SHA: exit 1, no POST" 1 "a $g16a_ok rc $GATE_RC: $(cat "$FX/gate.err")"
+fi
+
+# g17. Qodo skipped the review as trivial, and the PR changes only files under deliveries/: success,
+# saying Qodo skipped the review, with the review as target_url.
+pr_case g17 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 2
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}, {"filename": "deliveries/2026-11-05-demo/desktop.png"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g17_want=$(post_line "$(head_sha)" success "Qodo skipped the review as trivial; this docs PR changes only deliveries/ (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g17_want" ]; then
+  report "g17. a skipped review on a PR that changes only deliveries/: success, saying so" 0
+else
+  report "g17. a skipped review on a PR that changes only deliveries/: success, saying so" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g18. Qodo skipped the review and the PR also changes notes.txt: pending, saying Qodo skipped the
+# review of this head, not success.
+pr_case g18 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 2
+printf '%s\n' '[{"filename": "notes.txt"}, {"filename": "deliveries/x.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g18_want=$(post_line "$(head_sha)" pending "Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g18_want" ]; then
+  report "g18. a skipped review on a PR that also changes notes.txt: pending, not success" 0
+else
+  report "g18. a skipped review on a PR that also changes notes.txt: pending, not success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g19. A rename out of deliveries/ (deliveries/x.md, previous_filename scripts/x.sh) counts by its old
+# path too: pending, not success.
+pr_case g19 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone
+printf '%s\n' '[{"filename": "deliveries/x.md", "previous_filename": "scripts/x.sh"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g19_want=$(post_line "$(head_sha)" pending "Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g19_want" ]; then
+  report "g19. a rename out of scripts/ into deliveries/: pending, counted by its old path" 0
+else
+  report "g19. a rename out of scripts/ into deliveries/: pending, counted by its old path" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g20. Qodo skipped the review, and the PR's changed files cannot be read: an error on the head,
+# exit 1 (rule 11), both when the call fails and when it returns an empty list.
+pr_case g20 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone
+g20_want=$(post_line "$(head_sha)" error "Could not list this PR's changed files; see the workflow run")
+touch "$FX/pr-files.fail"
+gate "$CASE" "$gate_now" --pr 24
+g20a_ok=0
+if [ "$GATE_RC" -eq 1 ] && [ "$(gate_posts)" = "$g20_want" ]; then g20a_ok=1; fi
+rm -f "$FX/pr-files.fail"
+printf '[]\n' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+if [ "$g20a_ok" -eq 1 ] && [ "$GATE_RC" -eq 1 ] && [ "$(gate_posts)" = "$g20_want" ]; then
+  report "g20. the changed files cannot be read, or are empty: error on the head, exit 1" 0
+else
+  report "g20. the changed files cannot be read, or are empty: error on the head, exit 1" 1 "a $g20a_ok rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g21. Qodo skipped the review, and the only changed file is deliveries-evil/x.md: pending, not
+# success. The docs-PR test is a prefix on deliveries/ with its slash, so a sibling directory does not count.
+pr_case g21 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone
+printf '%s\n' '[{"filename": "deliveries-evil/x.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g21_want=$(post_line "$(head_sha)" pending "Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g21_want" ]; then
+  report "g21. a skipped review on a PR that changes only deliveries-evil/: pending, not success" 0
+else
+  report "g21. a skipped review on a PR that changes only deliveries-evil/: pending, not success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g22. Qodo skipped the review, the listed files are all docs, but the PR has 3 changed files: the
+# list is not known to be whole, so pending, not success (pulls/N/files caps at 3,000 files).
+pr_case g22 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 3
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}, {"filename": "deliveries/2026-11-05-demo/desktop.png"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g22_want=$(post_line "$(head_sha)" pending "Qodo skipped the review as trivial and the PR's file list is incomplete; ask Qodo for a review (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g22_want" ]; then
+  report "g22. a list with fewer files than changed_files: pending, saying the list is incomplete" 0
+else
+  report "g22. a list with fewer files than changed_files: pending, saying the list is incomplete" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g23. Qodo skipped the review, and the PR's changed-file count cannot be read (the call fails): an
+# error on the head, exit 1 (rule 11), not a success on the list alone.
+pr_case g23 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 2
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}, {"filename": "deliveries/2026-11-05-demo/desktop.png"}]' > "$FX/pr-files.json"
+touch "$FX/pull-24-read-2.fail"
+gate "$CASE" "$gate_now" --pr 24
+g23_want=$(post_line "$(head_sha)" error "Could not read this PR's changed-file count; see the workflow run")
+if [ "$GATE_RC" -eq 1 ] && [ "$(gate_posts)" = "$g23_want" ]; then
+  report "g23. the changed-file count cannot be read: error on the head, exit 1" 0
+else
+  report "g23. the changed-file count cannot be read: error on the head, exit 1" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g24. A docs file renamed within deliveries/ is one file: its two paths do not make the list look
+# longer than the PR's changed_files (1), so success.
+pr_case g24 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 1
+printf '%s\n' '[{"filename": "deliveries/x.md", "previous_filename": "deliveries/old.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g24_want=$(post_line "$(head_sha)" success "Qodo skipped the review as trivial; this docs PR changes only deliveries/ (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g24_want" ]; then
+  report "g24. a docs file renamed within deliveries/ counts once: success" 0
+else
+  report "g24. a docs file renamed within deliveries/ counts once: success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g25. The PR's head changes between the status's head and the re-read (a push during the checks):
+# no status is posted for this run, the line says so, and the gate exits 0 (rule 11).
+pr_case g25 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 2
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}, {"filename": "deliveries/2026-11-05-demo/desktop.png"}]' > "$FX/pr-files.json"
+jq '.head.sha = "0123456789abcdef0123456789abcdef01234567"' "$FX/pull.json" > "$FX/pull-24-read-3.json"
+gate "$CASE" "$gate_now" --pr 24
+if [ "$GATE_RC" -eq 0 ] && [ -z "$(gate_posts)" ] && grep -qF 'the head changed during the check' "$FX/gate.out"; then
+  report "g25. the head changed during the check: no POST, a line saying so, exit 0" 0
+else
+  report "g25. the head changed during the check: no POST, a line saying so, exit 0" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.out") $(cat "$FX/gate.err")"
+fi
+
+# g26. The head re-read fails: an error on the head, exit 1 (rule 11), not a success on the old head.
+pr_case g26 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 2
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}, {"filename": "deliveries/2026-11-05-demo/desktop.png"}]' > "$FX/pr-files.json"
+touch "$FX/pull-24-read-3.fail"
+gate "$CASE" "$gate_now" --pr 24
+g26_want=$(post_line "$(head_sha)" error "Could not read this PR's head; see the workflow run")
+if [ "$GATE_RC" -eq 1 ] && [ "$(gate_posts)" = "$g26_want" ]; then
+  report "g26. the head re-read fails: error on the head, exit 1" 0
+else
+  report "g26. the head re-read fails: error on the head, exit 1" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g27. Qodo skipped the review, and the only changed file is deliveries/TEMPLATE.md: pending. The
+# template is what every doc is built from, and nothing checks it (AGENTS.md rule 9).
+pr_case g27 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 1
+printf '%s\n' '[{"filename": "deliveries/TEMPLATE.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g27_want=$(post_line "$(head_sha)" pending "Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g27_want" ]; then
+  report "g27. a skipped review on a PR that changes only deliveries/TEMPLATE.md: pending, not success" 0
+else
+  report "g27. a skipped review on a PR that changes only deliveries/TEMPLATE.md: pending, not success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g28. A doc renamed from deliveries/TEMPLATE.md: the old path counts, so pending, not success.
+pr_case g28 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 1
+printf '%s\n' '[{"filename": "deliveries/x.md", "previous_filename": "deliveries/TEMPLATE.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g28_want=$(post_line "$(head_sha)" pending "Qodo skipped the review of this head as trivial; ask Qodo for a review, or merge knowing (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g28_want" ]; then
+  report "g28. a doc renamed from deliveries/TEMPLATE.md: pending, counted by its old path" 0
+else
+  report "g28. a doc renamed from deliveries/TEMPLATE.md: pending, counted by its old path" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g29. Qodo skipped the review, the listed files are all docs, but changed_files is not a number (null):
+# pending, saying the list is incomplete. A count that cannot be read is not a match (AGENTS.md rules 8 and 11).
+pr_case g29 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone null
+printf '%s\n' '[{"filename": "deliveries/2026-11-05-demo.md"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g29_want=$(post_line "$(head_sha)" pending "Qodo skipped the review as trivial and the PR's file list is incomplete; ask Qodo for a review (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g29_want" ]; then
+  report "g29. a skipped review, docs-only list, changed_files not a number: pending, not success" 0
+else
+  report "g29. a skipped review, docs-only list, changed_files not a number: pending, not success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
+fi
+
+# g30. Qodo skipped the review, and the only changed file is deliveries/TEMPLATE.md.bak (one file, the
+# count matches): success. The template rule matches the exact path deliveries/TEMPLATE.md, not a prefix.
+pr_case g30 other plain
+gate_setup
+skipped_review_for "$(head_sha)" "$FX/review-skip.md"
+fx_qodo "$FX/review-skip.md"
+fx_pull open false someone 1
+printf '%s\n' '[{"filename": "deliveries/TEMPLATE.md.bak"}]' > "$FX/pr-files.json"
+gate "$CASE" "$gate_now" --pr 24
+g30_want=$(post_line "$(head_sha)" success "Qodo skipped the review as trivial; this docs PR changes only deliveries/ (AGENTS.md rule 9)" "$gate_review_url")
+if [ "$GATE_RC" -eq 0 ] && [ "$(gate_posts)" = "$g30_want" ]; then
+  report "g30. a skipped review on a PR whose only file is deliveries/TEMPLATE.md.bak: success" 0
+else
+  report "g30. a skipped review on a PR whose only file is deliveries/TEMPLATE.md.bak: success" 1 "rc $GATE_RC: $(gate_posts) $(cat "$FX/gate.err")"
 fi
 
 # agree: the generator's qodo-open and the gate's status on the same six Qodo reviews. A finding
@@ -3130,6 +3452,21 @@ if [ "$DR_RC" -ne 0 ] && grep -qF 'records qodo-open unknown' "$FX/run.log" && !
   report "dr17. qodo-open unknown: red, nothing committed or pushed" 0
 else
   report "dr17. qodo-open unknown: red, nothing committed or pushed" 1 "$(dr_detail)"
+fi
+
+# dr17b. Qodo skipped the final review as trivial (qodo-open skipped): not an error. The run goes on,
+# warns that the head was not reviewed, and the docs PR records skipped.
+dr_case dr17b other plain
+skipped_review_for "$(head_sha)" "$FX/ag.md"
+fx_qodo "$FX/ag.md"
+dr_run
+if [ "$DR_RC" -eq 0 ] && grep -qF '::warning::PR #24' "$FX/run.log" \
+  && grep -qF 'final Qodo review was skipped as trivial, so the head was not reviewed' "$FX/run.log" \
+  && grep -qF 'docs PR: https://github.com/lioramilbaum/lioramilbaum.github.io/pull/104' "$FX/run.log" \
+  && git -C "$DR_FORK" show "refs/heads/docs/delivery-pr-24:$doc_name" | grep -qF 'qodo-open=skipped -->'; then
+  report "dr17b. qodo-open skipped: the run warns, goes on, and the docs PR records skipped" 0
+else
+  report "dr17b. qodo-open skipped: the run warns, goes on, and the docs PR records skipped" 1 "$(dr_detail)"
 fi
 
 # dr18. The generator (or anything else) leaves a file outside the doc and its screenshot directory: red.

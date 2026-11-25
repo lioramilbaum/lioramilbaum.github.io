@@ -603,6 +603,18 @@ case_g_qodo_unknown_layout() {
   need grep -q 'open: unknown' "$fx"/body-*.md
 }
 
+# Qodo skipped the review of the head as trivial: the run stops at the qodo stage with the owner's message.
+case_g_qodo_skipped() {
+  new_case
+  printf '0 skipped\n' > "$fx/qodo-plan"
+  run_runner 41
+  need test "$rc_runner" -ne 0
+  need test "$(wc -l < "$fx/qodo-calls.log" | tr -d ' ')" -eq 1
+  need test "$(cat "$fx/claude-count")" -eq 1
+  need grep -qF 'stopped at the qodo stage' "$fx"/body-*.md
+  need grep -qF 'Qodo skipped the review of the head as trivial, so the head was not reviewed. The owner decides: ask Qodo for a review, or merge knowing.' "$fx"/body-*.md
+}
+
 case_h_model_flags() {
   new_case
   run_runner 41
@@ -1411,6 +1423,7 @@ run_case "e: Qodo open every round, three rounds, leases, stop names round 3 of 
 run_case "e: Qodo clears after one fix round, the PR is ready" case_e_qodo_clears_after_fix
 run_case "f: Qodo never settles, the wait ends after 20 minutes" case_f_qodo_never_settles
 run_case "g: Qodo lists an unknown layout, stop at once" case_g_qodo_unknown_layout
+run_case "g: Qodo skipped the review as trivial, stop at the qodo stage with the owner's message" case_g_qodo_skipped
 run_case "h: the model runs with the restricted mode, exact allow and deny rules, a throwaway HOME" case_h_model_flags
 run_case "i: an edit under .github/ stops before the commit" case_i_guarded_path .github/workflows/rogue.yml
 run_case "i: an edit under deliveries/ stops before the commit" case_i_guarded_path deliveries/2026-11-08-x.md

@@ -459,6 +459,7 @@ else
       printf 'V\t%s\t%s\n' "$vnum" "$digest"
     done < <(grep '^V' "$parsed")
     grep '^C' "$parsed" || true
+    grep '^S' "$parsed" || true
     grep '^F' "$parsed" || true
   } > "$ready"
 
@@ -472,8 +473,12 @@ else
     function unreadable() {
       print "Qodo\047s latest review could not be read: it has no finding the generator can parse, and not every group says it is clear."
     }
+    function skippedtext() {
+      print "Qodo skipped its final review of the merged head as trivial, so the head was not reviewed."
+    }
     $1 == "V" { nv = $2 + 0; vd[nv] = $3; next }
     $1 == "C" { cl[$2 + 0] = 1; next }
+    $1 == "S" { sk[$2 + 0] = 1; next }
     $1 == "F" {
       key = $4
       if (!(key in ft)) { order[++no] = key; ft[key] = $6; fsev[key] = $3; fkind[key] = $5 }
@@ -501,6 +506,7 @@ else
         # clear. Otherwise the layout is unknown to this generator, and the owner must look.
         if (!ok) { unclear(); print "other" > openf }
         else if (cl[nv]) { print "Qodo\047s latest review lists no findings."; print "0" > openf }
+        else if (sk[nv]) { skippedtext(); print "skipped" > openf }
         else { unreadable(); print "unknown" > openf }
         close(openf)
         exit
@@ -522,8 +528,8 @@ else
         # Only findings that the latest review no longer lists were parsed, and it is not clear:
         # the open ones may sit in a layout this parse misses, so the count is not zero.
         printf "\n"
-        unreadable()
-        print "unknown" > openf
+        if (sk[nv]) { skippedtext(); print "skipped" > openf }
+        else { unreadable(); print "unknown" > openf }
       } else {
         printf "\nOpen findings in Qodo\047s latest review: %d.\n", nopen
         print nopen > openf

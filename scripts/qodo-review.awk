@@ -10,6 +10,7 @@
 #   V vnum sha                 the commit the review names (its marker <!-- .../commit/<sha> -->);
 #                              empty when it names none
 #   C vnum                     the review is clear (see below)
+#   S vnum                     Qodo skipped the review as trivial, so the head was not reviewed
 #   F vnum sev key kind title  one per finding: its severity, its key (the id in its /findings/
 #                              link, else "title:" and the title), its kind and its title
 #
@@ -18,6 +19,11 @@
 # opener or the review's end, and at least one clear phrase was seen. "Great, no issues found!"
 # (PR #35's layout) counts only when the review has no opener. Anything else is not clear, so a
 # layout this parse misses cannot read as zero.
+#
+# A review is skipped (S, and never C) only when it has both "No findings to report" and the
+# sentence "Qodo did not complete this review ... judged trivial and was not reviewed", with no
+# "<strong>View " header, no group opener and no finding (PR #148's layout). Anything else that
+# mentions the sentence is not skipped, so it stays unknown.
       function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
       {
         if (sha == "" && substr($0, 1, 5) == "<!-- " && (i = index($0, "/commit/")) > 0) {
@@ -59,12 +65,16 @@
         }
         if (index($0, "Nice, no open findings for this group") > 0) { nice++; open = 0 }
         if (index($0, "Great, no issues found!") > 0) great++
+        if (index($0, "No findings to report") > 0) nofind++
+        if (index($0, "Qodo did not complete this review") > 0 && index($0, "judged trivial and was not reviewed") > 0) skipline++
       }
       END {
         if (open) bad = 1
-        if (!view && !bad && (nice > 0 || (great > 0 && groups == 0))) clr = 1
+        if (!view && !bad && skipline == 0 && (nice > 0 || (great > 0 && groups == 0))) clr = 1
+        skipped = (skipline > 0 && nofind > 0 && !view && groups == 0 && n == 0)
         print "V\t" vnum "\t" sha
         if (clr) print "C\t" vnum
+        if (skipped) print "S\t" vnum
         for (j = 1; j <= n; j++) {
           key = fu[j]
           if (key == "") key = "title:" ft[j]
