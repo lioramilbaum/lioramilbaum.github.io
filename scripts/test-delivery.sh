@@ -130,6 +130,8 @@ case "$1 $2" in
     c=$(cat "$GH_FIXTURES/pr-${3:-x}-calls" 2>/dev/null || echo 0)
     c=$((c + 1))
     echo "$c" > "$GH_FIXTURES/pr-${3:-x}-calls"
+    # pr-N-view-K.fail makes only the K-th view fail (the delivery run's second read of a reused body).
+    if [ -e "$GH_FIXTURES/pr-${3:-x}-view-$c.fail" ]; then echo "gh: simulated failure" >&2; exit 1; fi
     if [ -e "$GH_FIXTURES/pr-${3:-x}-view-$c.json" ]; then fixture=$GH_FIXTURES/pr-$3-view-$c.json; fi ;;
   "pr list") fixture=$GH_FIXTURES/prlist.json ;;
   "pr create") fixture=$GH_FIXTURES/pr-create-out.txt ;;
@@ -4085,13 +4087,13 @@ else
   report "dr64. a doc on the reused branch with no PR line: red, named, nothing pushed" 1 "$(dr_detail)"
 fi
 
-# dr65. The reused docs PR cannot be read after the push (its body): red, naming it.
+# dr65. The reused docs PR cannot be read before the push (its body): red, naming it.
 dr_case dr65 other plain
 dr_doc23 docs/delivery-pr-23
 dr_reuse docs/delivery-pr-23 @HEAD@
 touch "$FX/pr-103.fail"
 dr_run
-if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read docs PR #103' "$FX/run.log"; then
+if [ "$DR_RC" -ne 0 ] && grep -qF 'could not read docs PR #103' "$FX/run.log" && ! pushed_to_fork; then
   report "dr65. the reused docs PR cannot be read: red, named" 0
 else
   report "dr65. the reused docs PR cannot be read: red, named" 1 "$(dr_detail)"
@@ -4474,6 +4476,114 @@ if [ "$DR_RC" -ne 0 ] && grep -qF "could not compare the fork's main with upstre
   report "dr90. the comparison of the fork's main with upstream's fails: red, named, nothing pushed, no PR" 0
 else
   report "dr90. the comparison of the fork's main with upstream's fails: red, named, nothing pushed, no PR" 1 "$(dr_detail)"
+fi
+
+# dr91. The one open docs PR lists no files (an empty PR): it is not reused, so a new docs PR is opened on a
+# new branch, and PR 103 is not edited.
+dr_case dr91 other plain
+dr_doc23 docs/delivery-pr-23
+printf '[{"number": 103, "headRefName": "docs/delivery-pr-23", "headRepositoryOwner": {"login": "lmilbaum"}, "baseRefName": "main", "files": []}]\n' > "$FX/prlist.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] \
+  && grep -qF -- 'pr create --repo lioramilbaum/lioramilbaum.github.io --base main --head lmilbaum:docs/delivery-pr-24' "$FX/gh-calls.log" \
+  && ! grep -qF -- 'pr edit 103' "$FX/gh-calls.log"; then
+  report "dr91. an empty docs PR is not reused: a new docs PR is opened" 0
+else
+  report "dr91. an empty docs PR is not reused: a new docs PR is opened" 1 "$(dr_detail)"
+fi
+
+# dr92. The reused docs PR's body has CRLF line ends: the rebuilt body keeps its ## Hackathon and ## Qodo notes
+# sections (their lines), and has no CR.
+dr_case dr92 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+awk '{ printf "%s\r\n", $0 }' "$FX/reuse-body.md" > "$FX/reuse-body.crlf" && mv "$FX/reuse-body.crlf" "$FX/reuse-body.md"
+jq -n --rawfile body "$FX/reuse-body.md" '{state: "OPEN", headRefOid: "@HEAD@", body: $body}' > "$FX/pr-103.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] \
+  && body_has "$FX/body-pr-edit.md" '## Hackathon' '## Qodo notes' \
+    'Day 4: Demo (https://github.com/orgs/qodo-hackathon/discussions/10)' 'Kept note: the screenshot point was fair.' \
+  && ! grep -qF "$(printf '\r')" "$FX/body-pr-edit.md"; then
+  report "dr92. a reused docs PR with a CRLF body keeps its Hackathon and Qodo notes" 0
+else
+  report "dr92. a reused docs PR with a CRLF body keeps its Hackathon and Qodo notes" 1 "$(dr_detail); body: $(cat "$FX/body-pr-edit.md" 2>/dev/null)"
+fi
+
+# dr93. The reused docs PR's body has a heading the run cannot read (### Hackathon, and no ## Hackathon): red,
+# named, and nothing pushed or edited.
+dr_case dr93 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+printf '## Acceptance criteria\n\nNo linked issue.\n\n### Hackathon\n\nDay 4: Demo\n' > "$FX/reuse-body.md"
+jq -n --rawfile body "$FX/reuse-body.md" '{state: "OPEN", headRefOid: "@HEAD@", body: $body}' > "$FX/pr-103.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "has a heading the run cannot read (### Hackathon); nothing is pushed or edited" "$FX/run.log" \
+  && ! pushed_to_fork && ! grep -qF -- '--body-file' "$FX/gh-calls.log"; then
+  report "dr93. a reused body with a heading the run cannot read: red, named, nothing pushed or edited" 0
+else
+  report "dr93. a reused body with a heading the run cannot read: red, named, nothing pushed or edited" 1 "$(dr_detail)"
+fi
+
+# dr94. The reused docs PR's body is edited between the run's two reads (the second read is the view that
+# pr-103-view-2.json answers): the rebuilt body keeps the second read's ## Hackathon and ## Qodo notes, not the
+# first read's, so an edit the owner made during the run is kept.
+dr_case dr94 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+cat > "$FX/reuse-body-2.md" <<'BODY'
+## Acceptance criteria
+
+No linked issue.
+
+## Why
+
+An older body.
+
+## Hackathon
+
+Day 5: Demo (https://github.com/orgs/qodo-hackathon/discussions/11)
+
+## Qodo notes
+
+Kept note: the second read said this.
+BODY
+jq -n --rawfile body "$FX/reuse-body-2.md" '{state: "OPEN", headRefOid: "@HEAD@", body: $body}' > "$FX/pr-103-view-2.json"
+dr_run
+if [ "$DR_RC" -eq 0 ] \
+  && body_has "$FX/body-pr-edit.md" '## Hackathon' '## Qodo notes' \
+    'Day 5: Demo (https://github.com/orgs/qodo-hackathon/discussions/11)' 'Kept note: the second read said this.' \
+  && ! grep -qF 'Day 4: Demo' "$FX/body-pr-edit.md" && ! grep -qF 'Kept note: the screenshot point was fair.' "$FX/body-pr-edit.md"; then
+  report "dr94. the reused body changes between the two reads: the rebuilt body keeps the second read's notes" 0
+else
+  report "dr94. the reused body changes between the two reads: the rebuilt body keeps the second read's notes" 1 "$(dr_detail)"
+fi
+
+# dr95. The second read of the reused docs PR's body fails: red, named, the branch pushed, and no body edit.
+dr_case dr95 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+touch "$FX/pr-103-view-2.fail"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "could not read the body of docs PR #103 again; docs/delivery-pr-23 is pushed and the body is not edited" "$FX/run.log" \
+  && pushed_to_fork && ! grep -qF -- '--body-file' "$FX/gh-calls.log"; then
+  report "dr95. the second read of the reused body fails: red, named, pushed, body not edited" 0
+else
+  report "dr95. the second read of the reused body fails: red, named, pushed, body not edited" 1 "$(dr_detail)"
+fi
+
+# dr96. The second read of the reused docs PR's body has a heading the run cannot read: red, named (the heading),
+# the branch pushed, and no body edit.
+dr_case dr96 other plain
+dr_doc23 docs/delivery-pr-23
+dr_reuse docs/delivery-pr-23 @HEAD@
+printf '## Acceptance criteria\n\nNo linked issue.\n\n### Hackathon\n\nDay 5: Demo\n' > "$FX/reuse-body-2.md"
+jq -n --rawfile body "$FX/reuse-body-2.md" '{state: "OPEN", headRefOid: "@HEAD@", body: $body}' > "$FX/pr-103-view-2.json"
+dr_run
+if [ "$DR_RC" -ne 0 ] && grep -qF "docs PR #103's body has a heading the run cannot read (### Hackathon); docs/delivery-pr-23 is pushed and the body is not edited" "$FX/run.log" \
+  && pushed_to_fork && ! grep -qF -- '--body-file' "$FX/gh-calls.log"; then
+  report "dr96. the second read of the reused body has a heading the run cannot read: red, named, pushed, body not edited" 0
+else
+  report "dr96. the second read of the reused body has a heading the run cannot read: red, named, pushed, body not edited" 1 "$(dr_detail)"
 fi
 
 if [ "$failures" -ne 0 ]; then

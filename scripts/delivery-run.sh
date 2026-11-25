@@ -258,6 +258,17 @@ set_docs() {
   subject=$(subject_for "${sorted_nums[@]}")
 }
 
+# body_tail BODY: a reused docs PR's ## Hackathon and ## Qodo notes, from the first such heading on, CRs dropped.
+body_tail() {
+  awk '{ sub(/\r$/, "") } /^## (Hackathon|Qodo notes)$/ { keep = 1 } keep' <<< "$1"
+}
+
+# unreadable_heading BODY: the first line above the first ## Hackathon or ## Qodo notes heading that is a
+# heading of the same name the run cannot read (another level, or other text after the name). Empty when none.
+unreadable_heading() {
+  awk '{ sub(/\r$/, "") } /^## (Hackathon|Qodo notes)$/ { exit } tolower($0) ~ /^[ \t]*#+[ \t]*(hackathon|qodo notes)/ { print; exit }' <<< "$1"
+}
+
 # write_body FILE TAIL: the docs PR's body, from the docs the branch carries (AGENTS.md rule 6). TAIL is
 # a reused PR's own ## Hackathon and ## Qodo notes, kept as they are; a new PR gets them empty.
 write_body() {
@@ -431,9 +442,10 @@ ASKPASS
     || die "could not list the open PRs"
   open_total=$(jq 'length' <<< "$open_json") || die "could not read the open PRs' list"
   (( open_total < 1000 )) || die "the open PRs list reached gh's limit (1000); the run cannot be sure it sees every docs PR"
-  open_list=$(jq -r '.[] | select(.headRepositoryOwner.login == "lmilbaum" and .baseRefName == "main" and (.headRefName | startswith("docs/delivery-")) and all(.files[]; .path | startswith("deliveries/"))) | [.number, .headRefName] | @tsv' <<< "$open_json") \
+  open_list=$(jq -r '.[] | select(.headRepositoryOwner.login == "lmilbaum" and .baseRefName == "main" and (.headRefName | startswith("docs/delivery-")) and (.files | length) > 0 and all(.files[]; .path | startswith("deliveries/"))) | [.number, .headRefName] | @tsv' <<< "$open_json") \
     || die "could not filter the open docs PRs"
   open_count=$(printf '%s\n' "$open_list" | grep -c . || true)
+  tail_sections=""
   case "$open_count" in
     0) git_run switch --quiet -C "$branch" origin/main || die "could not check out $branch from origin/main" ;;
     1)
@@ -455,6 +467,12 @@ ASKPASS
         git_run rebase --abort >/dev/null 2>&1 || true
         die "rebasing $branch onto origin/main conflicts; nothing is pushed: $(tail -n 3 "$work/rebase.log" | tr '\n' ' ')"
       fi
+      # The reused PR's body is read here, before the push, so a body the run cannot read stops the run with
+      # nothing pushed or edited. The body is read again just before the edit, after the push (below), so an
+      # edit the owner made during the run is kept.
+      old_body=$(gh pr view "$docs_pr" --repo "$repo" --json body --jq .body) || die "could not read docs PR #$docs_pr"
+      bad=$(unreadable_heading "$old_body")
+      [[ -z "$bad" ]] || die "docs PR #$docs_pr's body has a heading the run cannot read ($bad); nothing is pushed or edited"
       ;;
     *) die "$open_count open docs PRs ($(printf '%s' "$open_list" | cut -f1 | tr '\n' ' ')) could take the doc; the run cannot tell which one to add it to" ;;
   esac
@@ -585,12 +603,15 @@ ASKPASS
   fi
 
   # The docs PR's title and body: created, or replaced (both with the PR token). A reused PR keeps its own
-  # ## Hackathon and ## Qodo notes.
+  # ## Hackathon and ## Qodo notes from a second read, made here after the push, so an edit made to the body
+  # during the run is kept. The first read (the reuse branch above) only stops a body the run cannot read.
   body="$work/pr-body.md"
-  tail_sections=""
   if [[ "$reused" == yes ]]; then
-    old_body=$(gh pr view "$docs_pr" --repo "$repo" --json body --jq .body) || die "could not read docs PR #$docs_pr"
-    tail_sections=$(printf '%s\n' "$old_body" | awk '/^## (Hackathon|Qodo notes)$/ { keep = 1 } keep')
+    old_body=$(gh pr view "$docs_pr" --repo "$repo" --json body --jq .body) \
+      || die "could not read the body of docs PR #$docs_pr again; $branch is pushed and the body is not edited"
+    bad=$(unreadable_heading "$old_body")
+    [[ -z "$bad" ]] || die "docs PR #$docs_pr's body has a heading the run cannot read ($bad); $branch is pushed and the body is not edited"
+    tail_sections=$(body_tail "$old_body")
   fi
   write_body "$body" "$tail_sections"
   if [[ "$reused" == yes ]]; then
