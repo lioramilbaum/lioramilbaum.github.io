@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -22,10 +20,18 @@ concurrency:
 
 jobs:
   package:
+    # The deploy runs in the upstream repository only: a fork never builds or publishes a copy.
+    if: github.repository == 'lioramilbaum/lioramilbaum.github.io'
     runs-on: ubuntu-26.04
+    # Configure Pages reads the Pages site (GET /repos/{owner}/{repo}/pages): pages: read, no write.
+    permissions:
+      contents: read
+      pages: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
@@ -43,7 +49,13 @@ jobs:
 
   deploy:
     needs: package
+    # Same guard as package: skipped anywhere but the upstream repository.
+    if: github.repository == 'lioramilbaum/lioramilbaum.github.io'
     runs-on: ubuntu-26.04
+    # Only this job deploys: pages: write creates the deployment, id-token: write fetches its OIDC token.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

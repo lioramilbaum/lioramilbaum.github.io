@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Parses the workflow files, checks the yearly deploy schedule, and checks who may write
-# statuses or run on pull_request_target (AGENTS.md rule 5): only qodo-findings.yml, whose
-# triggers, permissions and concurrency are pinned here. agent-run.yml (AGENTS.md Setup) is
-# pinned too: its trigger, guard, permissions and steps, and so is agent-labels.yml (the label
-# removal on close): its trigger, guard, permissions, runner, timeout and two steps. Docker only,
+# Parses the workflow files, checks the yearly deploy schedule, and checks who may write statuses
+# or run on pull_request_target (AGENTS.md rule 5): only qodo-findings.yml, whose triggers,
+# permissions and concurrency are pinned here. agent-run.yml (AGENTS.md Setup) is pinned too: its
+# trigger, guard, permissions and steps, and so is agent-labels.yml (the label removal on close):
+# its trigger, guard, permissions, runner, timeout and two steps. deploy-pages.yml's guard,
+# permissions (workflow, package and deploy) and package's checkout are pinned too. Docker only,
 # no network: the Ruby runs in the jekyll-build-pages image that the build step pulls, so it uses
 # the same YAML library CI does. The image is amd64-only. --user keeps the container from writing
 # as root; the workflows and script mounts are read-only.
@@ -45,6 +46,7 @@ report.call("qodo-findings.yml", "is missing; the qodo-findings status is not se
 report.call("agent-run.yml", "is missing; the agent run is not pinned") unless files.any? { |f| File.basename(f) == "agent-run.yml" }
 report.call("delivery-doc.yml", "is missing; the Delivery doc workflow is not pinned") unless files.any? { |f| File.basename(f) == "delivery-doc.yml" }
 report.call("agent-labels.yml", "is missing; the label removal on close is not pinned") unless files.any? { |f| File.basename(f) == "agent-labels.yml" }
+report.call("deploy-pages.yml", "is missing; the Pages deploy's guard, permissions and checkout are not pinned") unless files.any? { |f| File.basename(f) == "deploy-pages.yml" }
 
 files.each do |path|
   name = File.basename(path)
@@ -323,6 +325,27 @@ files.each do |path|
   end
 
   next unless name == "deploy-pages.yml"
+  # Pages deploy (issue #151): both jobs run only in the upstream repository; no write at the workflow
+  # level; package reads only; deploy alone writes Pages and fetches the OIDC token; package's checkout
+  # does not leave the job token in .git/config.
+  deploy_if = "github.repository == 'lioramilbaum/lioramilbaum.github.io'"
+  report.call(name, "top-level permissions are not exactly contents: read; pages: write and id-token: write belong on the deploy job only (issue #151)") unless w["permissions"] == { "contents" => "read" }
+  report.call(name, "jobs are not exactly package and deploy") unless jobs.keys.map(&:to_s).sort == ["deploy", "package"]
+  package = jobs["package"].is_a?(Hash) ? jobs["package"] : nil
+  deploy = jobs["deploy"].is_a?(Hash) ? jobs["deploy"] : nil
+  report.call(name, "has no package job mapping; its permissions and checkout cannot be checked") unless package
+  report.call(name, "has no deploy job mapping; its permissions cannot be checked") unless deploy
+  if package
+    report.call(name, "job package if is not exactly #{deploy_if}; the deploy runs in the upstream repository only, so a fork never publishes a copy (issue #151)") unless package["if"].to_s.gsub(/\s+/, " ").strip == deploy_if
+    report.call(name, "job package permissions are not exactly contents: read and pages: read; it must not write (issue #151)") unless package["permissions"] == { "contents" => "read", "pages" => "read" }
+    steps = package["steps"].is_a?(Array) ? package["steps"] : []
+    checkouts = steps.select { |s| s.is_a?(Hash) && s["uses"].to_s.start_with?("actions/checkout@") }
+    report.call(name, "job package does not have exactly one actions/checkout step") unless checkouts.size == 1
+    with = checkouts.size == 1 && checkouts[0]["with"].is_a?(Hash) ? checkouts[0]["with"] : {}
+    report.call(name, "job package checkout does not set persist-credentials: false; the job token stays in .git/config for the later steps (issue #151)") unless with["persist-credentials"] == false
+  end
+  report.call(name, "job deploy if is not exactly #{deploy_if}; the deploy runs in the upstream repository only, so a fork never publishes a copy (issue #151)") if deploy && deploy["if"].to_s.gsub(/\s+/, " ").strip != deploy_if
+  report.call(name, "job deploy permissions are not exactly pages: write and id-token: write (issue #151)") if deploy && deploy["permissions"] != { "pages" => "write", "id-token" => "write" }
   unless on.is_a?(Hash)
     report.call(name, "on: is not a mapping")
     next
