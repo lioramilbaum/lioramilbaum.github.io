@@ -4,17 +4,21 @@
 # a built page and prints "<code> <url>". Exits non-zero if any response is not 2xx.
 # The LinkedIn share-offsite URL is skipped: it redirects to a login page.
 #
-# Checks start in batches of 20 background jobs, in order: links first, then comment
+# Checks start in batches of 25 background jobs, in order: links first, then comment
 # lookups. Each batch waits for its slowest job before the next starts. A job takes at
 # most one link's retry budget (about 66 s), or about 200 s for a comment lookup (up to
 # 3 API pages, each with the same budget). So the worst case is the sum over batches.
-# This page has 24 links and 16 lookups (40 jobs): a batch of 20 links (66 s), then a
-# batch of 4 links and 16 lookups (198 s), 264 s in all, inside CI's 5-minute step
-# timeout with 36 s to spare. That holds while the cap is between ceil(jobs/2) and the
-# number of links, so the first batch has links only. Each new day adds a link and a
-# lookup. The Day 17 link (42 jobs) starts a third batch and takes the worst case past
-# 300 s, so the budget must change before it is added. A cap above the number of links
-# puts a lookup in the first batch and gives two lookup batches (396 s).
+# This page has 25 links and 17 lookups (42 jobs): a batch of 25 links (66 s), then a
+# batch of 17 lookups (198 s), 264 s in all, inside CI's 5-minute step timeout with
+# 36 s to spare. That holds while the cap is between ceil(jobs/2) and the number of
+# links, so the first batch has links only (or at least the number of jobs: one batch,
+# 198 s). Each new day adds a link and a lookup, so a cap of 25 holds through 29 links
+# and 21 lookups (50 jobs, Day 21). A cap above the number of links and below the number
+# of jobs puts a lookup in the first batch and gives two lookup batches (396 s).
+# Day 22 adds a link and a lookup: 30 links and 22 lookups (52 jobs). The second batch
+# then takes 5 links and 20 lookups, and the last 2 lookups start a third batch: 66 +
+# 198 + 198 = 462 s, past the 5-minute step timeout. The cap or the timeout must change
+# before the Day 22 link is added.
 #
 # Discussion comment links (https://github.com/<o>/<r>/discussions/<n>#discussioncomment-<id>)
 # are also looked up through the REST API: 200 if the discussion has the comment,
@@ -72,7 +76,7 @@ comment() {
 }
 
 # At most $cap checks run at once: every $cap-th job waits for the batch before it.
-cap=20
+cap=25
 n=0
 start() {
   n=$((n + 1))
