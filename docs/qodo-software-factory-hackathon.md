@@ -62,6 +62,7 @@ When I read back Qodo's reviews of six pull requests, five had the same bug in d
 - [Day 14](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/16#discussioncomment-19864914)
 - [Day 15](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/17#discussioncomment-19879890)
 - [Day 16](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/18#discussioncomment-19884457)
+- [Day 17](https://github.com/qodo-hackathon/software-factory-hackathon/discussions/19#discussioncomment-19889971)
 
 Later days are in the [discussions](https://github.com/qodo-hackathon/software-factory-hackathon/discussions).
 
