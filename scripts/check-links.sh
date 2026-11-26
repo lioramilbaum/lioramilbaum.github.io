@@ -8,8 +8,8 @@
 # lookups. Each batch waits for its slowest job before the next starts. A job takes at
 # most one link's retry budget (about 66 s), or about 200 s for a comment lookup (up to
 # 3 API pages, each with the same budget). So the worst case is the sum over batches.
-# This page has 26 links and 18 lookups (44 jobs): a batch of 25 links (66 s), then a
-# batch of 1 link and 18 lookups (198 s), 264 s in all, inside CI's 5-minute step
+# This page has 27 links and 19 lookups (46 jobs): a batch of 25 links (66 s), then a
+# batch of 2 links and 19 lookups (198 s), 264 s in all, inside CI's 5-minute step
 # timeout with 36 s to spare. That holds while the cap is between ceil(jobs/2) and the
 # number of links, so the first batch has links only (or at least the number of jobs:
 # one batch, 198 s). Each new day adds a link and a lookup, so a cap of 25 holds through
