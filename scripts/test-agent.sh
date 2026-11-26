@@ -227,7 +227,10 @@ STUB
 # docker-N.argv (one per line, N counted per run), then runs its command on this host as a
 # container would: with only the -e variables in its environment (HOME stays the fixture, which
 # the other stubs read), in the -w directory, and with --entrypoint in front of the command. An
-# image with no command (the build) does nothing. Each docker run is one container.
+# image with no command (the build) logs "build ran" to build-runs.log, then acts on the next line of
+# build-plan when the file exists: pass exits 0, fail prints a build error and exits 1 (the build
+# failing), and any other line (or an empty one) is an unknown step and exits 9. No build-plan exits 0.
+# Each docker run is one container.
 cat > "$bin/docker" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -259,7 +262,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -n "$entry" ]; then cmd=("$entry" ${cmd[@]+"${cmd[@]}"}); fi
-if [ ${#cmd[@]} -eq 0 ]; then exit 0; fi
+if [ ${#cmd[@]} -eq 0 ]; then
+  echo "build ran" >> "$fx/build-runs.log"
+  if [ -e "$fx/build-plan" ]; then
+    # wc -l counts complete lines: a plan with none (zero bytes, or one line with no newline) has no step to read.
+    # An unterminated line after complete ones is ignored.
+    step=""
+    if [ "$(wc -l < "$fx/build-plan" | tr -d ' ')" -gt 0 ]; then step=$(agent-test-plan "$fx/build-plan" "$fx/build-plan-count"); fi
+    case "$step" in
+      pass) ;;
+      fail) echo "jekyll-build-pages: build error (build fixture)"; exit 1 ;;
+      *) echo "docker stub: unknown build plan step '$step'" >&2; exit 9 ;;
+    esac
+  fi
+  exit 0
+fi
 # The working directory is a container path: the host directory mounted there.
 for m in ${mounts[@]+"${mounts[@]}"}; do
   rest=${m#*:}
@@ -555,6 +572,48 @@ case_d_checks_always_fail() {
   need_not grep -q 'pr create' "$fx/gh-calls.log"
   need_not git -C "$fx/fork.git" rev-parse --verify -q refs/heads/fix/issue-41
   need grep -qF -- '--add-label agent-stuck' "$fx/gh-calls.log"
+}
+
+# case_build_always_fails: main's build-site.sh fails on every run. The runner must stop at the checks
+# stage: neither check stub nor check container runs (no checks-runs.log or check-site-runs.log), the
+# build output still reaches the model in checks-log.txt, and there is no commit, push or PR.
+# Calls: implement (1) and two fixes (2 and 3), one build each.
+case_build_always_fails() {
+  new_case
+  printf 'fail\n' > "$fx/build-plan"
+  run_runner 41
+  need test "$rc_runner" -ne 0
+  need test "$(cat "$fx/claude-count")" -eq 3
+  need test "$(wc -l < "$fx/build-runs.log" | tr -d ' ')" -eq 3
+  need_not test -e "$fx/checks-runs.log"
+  need_not test -e "$fx/check-site-runs.log"
+  need grep -q 'stopped at the checks stage (run 3 of 3)' "$fx"/body-*.md
+  need grep -qF 'jekyll-build-pages: build error (build fixture)' "$fx"/body-*.md
+  need grep -qF 'jekyll-build-pages: build error (build fixture)' "$fx/claude-2-io/checks-log.txt"
+  need_not grep -q 'pr create' "$fx/gh-calls.log"
+  need_not git -C "$fx/fork.git" rev-parse --verify -q refs/heads/fix/issue-41
+  need_not test -e "$fx/git-push.log"
+  need grep -qF -- '--add-label agent-stuck' "$fx/gh-calls.log"
+  # No commit: the clone's branch, made at main by implement, still points at the seed commit.
+  need test -s "$fx/seed-sha"
+  need test "$(git -C "$fx/repo" rev-parse refs/heads/fix/issue-41)" = "$(cat "$fx/seed-sha")"
+}
+
+# case_build_fails_once: the build fails on the first run only. The model gets the build's log as its
+# fix prompt's input, and the run carries on through the checks to the PR.
+case_build_fails_once() {
+  new_case
+  printf 'fail\npass\n' > "$fx/build-plan"
+  run_runner 41
+  need test "$rc_runner" -eq 0
+  need test "$(cat "$fx/claude-count")" -eq 2
+  need grep -qF 'jekyll-build-pages: build error (build fixture)' "$fx/claude-2-io/checks-log.txt"
+  need grep -q 'run 1 of 3' "$fx/claude-2.prompt"
+  need test "$(wc -l < "$fx/build-runs.log" | tr -d ' ')" -eq 2
+  need test "$(wc -l < "$fx/checks-runs.log" | tr -d ' ')" -eq 1
+  need test "$(wc -l < "$fx/check-site-runs.log" | tr -d ' ')" -eq 1
+  need grep -q 'pr create' "$fx/gh-calls.log"
+  need grep -qF -- '--add-label agent-done' "$fx/gh-calls.log"
 }
 
 case_e_qodo_three_rounds() {
@@ -1419,6 +1478,8 @@ run_case "b: happy path, one commit to the fork, PR upstream, ready for the owne
 run_case "c: checks that always fail stop before any push" case_c_checks_never_pass
 run_case "d: checks fail twice, then pass, after two fixes" case_d_checks_pass_on_third
 run_case "d: checks always fail, stop after the retry limit with the log" case_d_checks_always_fail
+run_case "d: the build fails every run, stop at the checks stage before any check container, no push or PR" case_build_always_fails
+run_case "d: the build fails once, the model gets the build log, the run carries on" case_build_fails_once
 run_case "e: Qodo open every round, three rounds, leases, stop names round 3 of 3" case_e_qodo_three_rounds
 run_case "e: Qodo clears after one fix round, the PR is ready" case_e_qodo_clears_after_fix
 run_case "f: Qodo never settles, the wait ends after 20 minutes" case_f_qodo_never_settles
