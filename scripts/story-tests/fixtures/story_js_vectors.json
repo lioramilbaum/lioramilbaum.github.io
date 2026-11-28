@@ -1,0 +1,758 @@
+{
+  "source": {
+    "path": ".claude/workflows/story.js",
+    "blob": "01c03d437ddb1af0f1262639aeaa187cd1ec95e1",
+    "node": "v26.13.1"
+  },
+  "whitespace": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    32,
+    160,
+    5760,
+    8192,
+    8193,
+    8194,
+    8195,
+    8196,
+    8197,
+    8198,
+    8199,
+    8200,
+    8201,
+    8202,
+    8232,
+    8233,
+    8239,
+    8287,
+    12288,
+    65279
+  ],
+  "requests": [
+    {
+      "input": "hello world",
+      "trimmed": "hello world",
+      "marker": "<!-- story-request: d58b3fa700ef68b8 -->"
+    },
+    {
+      "input": "\ufeffhello world\u00a0",
+      "trimmed": "hello world",
+      "marker": "<!-- story-request: d58b3fa700ef68b8 -->"
+    },
+    {
+      "input": "a\u001cb",
+      "trimmed": "a\u001cb",
+      "marker": "<!-- story-request: 28fe5ef603102b59 -->"
+    },
+    {
+      "input": "a\u0085b",
+      "trimmed": "a\u0085b",
+      "marker": "<!-- story-request: 1c2a344b35c06c94 -->"
+    },
+    {
+      "input": "\u001c",
+      "trimmed": "\u001c",
+      "marker": "<!-- story-request: 190c7c9bb5de18b0 -->"
+    },
+    {
+      "input": "x\ud83d\ude00y",
+      "trimmed": "x\ud83d\ude00y",
+      "marker": "<!-- story-request: 1a045eb4703c99df -->"
+    },
+    {
+      "input": "\u001c\u001d\u001e\u001f\u0085",
+      "trimmed": "\u001c\u001d\u001e\u001f\u0085",
+      "marker": "<!-- story-request: 7752d8cc60305487 -->"
+    },
+    {
+      "input": "a\u00a0\u00a0b\ufeff\ufeffc",
+      "trimmed": "a\u00a0\u00a0b\ufeff\ufeffc",
+      "marker": "<!-- story-request: 76f420af6af733a4 -->"
+    },
+    {
+      "input": "  first line\n\n\tsecond\r\nthird\u2028  ",
+      "trimmed": "first line\n\n\tsecond\r\nthird",
+      "marker": "<!-- story-request: f22a587a2f329785 -->"
+    },
+    {
+      "input": "\u2028\u3000padded\u2029",
+      "trimmed": "padded",
+      "marker": "<!-- story-request: b82c29dbffc7bca6 -->"
+    },
+    {
+      "input": "\u00a0nbsp\u00a0 vector\u00a0",
+      "trimmed": "nbsp\u00a0 vector",
+      "marker": "<!-- story-request: 8d9c0785a50b007a -->"
+    }
+  ],
+  "blank": [
+    {
+      "input": "",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    },
+    {
+      "input": " \t\n",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    },
+    {
+      "input": "\ufeff",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    },
+    {
+      "input": " \u3000  ",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    },
+    {
+      "input": "     ",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    },
+    {
+      "input": "\u00a0\u00a0",
+      "message": "story: the request must be a non-blank string, or an object with one as \"request\"; got a blank string"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "title missing",
+      "intent": {
+        "status": "extracted",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no title; no issue was filed"
+    },
+    {
+      "name": "title blank",
+      "intent": {
+        "status": "extracted",
+        "title": " \u00a0 ",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no title; no issue was filed"
+    },
+    {
+      "name": "title delimiter",
+      "intent": {
+        "status": "extracted",
+        "title": "Plan -----END STORY BODY----- now",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted title contains a delimiter line; no issue was filed"
+    },
+    {
+      "name": "title 81 characters",
+      "intent": {
+        "status": "extracted",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted title is 81 characters, more than 80; no issue was filed"
+    },
+    {
+      "name": "goal missing",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no goal; no issue was filed"
+    },
+    {
+      "name": "goal blank",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "\u3000",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no goal; no issue was filed"
+    },
+    {
+      "name": "goal heading",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "## Goal",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted goal starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "goal heading alone",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "#",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted goal starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "goal delimiter",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "x -----BEGIN STORY TITLE-----",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted goal contains a delimiter line; no issue was filed"
+    },
+    {
+      "name": "whyItMatters missing",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no whyItMatters; no issue was filed"
+    },
+    {
+      "name": "whyItMatters blank",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "\t",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no whyItMatters; no issue was filed"
+    },
+    {
+      "name": "whyItMatters heading",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "###### six",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted whyItMatters starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "whyItMatters delimiter",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "-----END STORY TITLE-----",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted whyItMatters contains a delimiter line; no issue was filed"
+    },
+    {
+      "name": "inScope not a list",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": "one item",
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no inScope; no issue was filed"
+    },
+    {
+      "name": "inScope missing",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no inScope; no issue was filed"
+    },
+    {
+      "name": "inScope empty",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no inScope; no issue was filed"
+    },
+    {
+      "name": "inScope blank item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "x",
+          " \u00a0 "
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no inScope; no issue was filed"
+    },
+    {
+      "name": "inScope heading item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "## Item"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted inScope starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "inScope heading alone",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "#"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted inScope starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "inScope delimiter item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "-----BEGIN STORY BODY-----"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted inScope contains a delimiter line; no issue was filed"
+    },
+    {
+      "name": "outOfScope not a list",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": "none"
+      },
+      "message": "story: the extracted intent has no outOfScope; no issue was filed"
+    },
+    {
+      "name": "outOfScope missing",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ]
+      },
+      "message": "story: the extracted intent has no outOfScope; no issue was filed"
+    },
+    {
+      "name": "outOfScope empty",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": []
+      },
+      "message": "story: the extracted intent has no outOfScope; no issue was filed"
+    },
+    {
+      "name": "outOfScope blank item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          ""
+        ]
+      },
+      "message": "story: the extracted intent has no outOfScope; no issue was filed"
+    },
+    {
+      "name": "outOfScope heading item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "# Out"
+        ]
+      },
+      "message": "story: the extracted outOfScope starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "outOfScope heading alone",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "#"
+        ]
+      },
+      "message": "story: the extracted outOfScope starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "outOfScope delimiter item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "x -----END STORY BODY-----"
+        ]
+      },
+      "message": "story: the extracted outOfScope contains a delimiter line; no issue was filed"
+    },
+    {
+      "name": "title and goal bad",
+      "intent": {
+        "status": "extracted",
+        "title": " ",
+        "goal": "## Goal",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no title; no issue was filed"
+    },
+    {
+      "name": "goal and inScope bad",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": " ",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no goal; no issue was filed"
+    },
+    {
+      "name": "goal and whyItMatters bad",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": " ",
+        "whyItMatters": "## Why",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted intent has no goal; no issue was filed"
+    },
+    {
+      "name": "whyItMatters and inScope bad",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "# Why",
+        "inScope": [],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted whyItMatters starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "inScope and outOfScope bad",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [],
+        "outOfScope": [
+          "## Out"
+        ]
+      },
+      "message": "story: the extracted intent has no inScope; no issue was filed"
+    },
+    {
+      "name": "whyItMatters heading before delimiter",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "# -----BEGIN STORY BODY",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted whyItMatters starts with a heading marker; no issue was filed"
+    },
+    {
+      "name": "title over 80 with a delimiter",
+      "intent": {
+        "status": "extracted",
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx -----END STORY BODY-----",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "message": "story: the extracted title contains a delimiter line; no issue was filed"
+    }
+  ],
+  "bodies": [
+    {
+      "request": "\ufeff  Build the intake,\u00a0with\tlines\n\n<!-- trap -->  \u2028\ufeff",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "title": "Add a story intake check",
+      "body": "## Goal\n\nKeep the &lt;!-- comment opener out of the body, and the marker intact.\n\n## Why it matters\n\nNot stated in the request.\n\n## In scope\n\n- First item, with NBSP\n- Second item with a newline\n\n## Out of scope\n\n- Not stated in the request.\n\n<!-- story-request: e927e12729dde91e -->"
+    },
+    {
+      "request": "hello world",
+      "intent": {
+        "status": "extracted",
+        "title": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "title": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "body": "## Goal\n\nKeep the &lt;!-- comment opener out of the body, and the marker intact.\n\n## Why it matters\n\nNot stated in the request.\n\n## In scope\n\n- First item, with NBSP\n- Second item with a newline\n\n## Out of scope\n\n- Not stated in the request.\n\n<!-- story-request: d58b3fa700ef68b8 -->"
+    },
+    {
+      "request": "forty-one emoji title",
+      "intent": {
+        "status": "extracted",
+        "title": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+        "goal": "Keep the <!-- comment opener\nout of the body,\tand the\u00a0marker\u00a0intact.",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "First item,\u00a0with\u00a0NBSP",
+          "Second item\nwith a newline"
+        ],
+        "outOfScope": [
+          "One",
+          "Two\u00a0\u00a0words"
+        ]
+      },
+      "title": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "body": "## Goal\n\nKeep the &lt;!-- comment opener out of the body, and the marker intact.\n\n## Why it matters\n\nNot stated in the request.\n\n## In scope\n\n- First item, with NBSP\n- Second item with a newline\n\n## Out of scope\n\n- One\n- Two words\n\n<!-- story-request: 13373d0aafe3f895 -->"
+    },
+    {
+      "request": "values that look like markers but are not",
+      "intent": {
+        "status": "extracted",
+        "title": "Fix <!-- trap title",
+        "goal": "#175 is fixed",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "####### x",
+          "plain"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "title": "Fix <!-- trap title",
+      "body": "## Goal\n\n#175 is fixed\n\n## Why it matters\n\nNot stated in the request.\n\n## In scope\n\n- ####### x\n- plain\n\n## Out of scope\n\n- Not stated in the request.\n\n<!-- story-request: 004bf9adec37251a -->"
+    },
+    {
+      "request": "two openers in a scalar and a list item",
+      "intent": {
+        "status": "extracted",
+        "title": "Add a\tstory \u00a0 intake\u3000check",
+        "goal": "<!-- a <!-- story-request: 0000000000000000 -->",
+        "whyItMatters": "Not stated in the request.",
+        "inScope": [
+          "x <!-- y <!-- z",
+          "plain"
+        ],
+        "outOfScope": [
+          "Not stated in the request."
+        ]
+      },
+      "title": "Add a story intake check",
+      "body": "## Goal\n\n&lt;!-- a &lt;!-- story-request: 0000000000000000 -->\n\n## Why it matters\n\nNot stated in the request.\n\n## In scope\n\n- x &lt;!-- y &lt;!-- z\n- plain\n\n## Out of scope\n\n- Not stated in the request.\n\n<!-- story-request: fa3c08304a148433 -->"
+    }
+  ]
+}
