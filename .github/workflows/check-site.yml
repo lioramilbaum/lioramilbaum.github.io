@@ -87,6 +87,18 @@ jobs:
             bash scripts/test-delivery.sh --snapshot
           fi
 
+      - name: Set up uv
+        # uv is pinned so `uv sync --locked` behaves the same on every run; Renovate moves this version.
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
+          enable-cache: false
+
+      - name: Test story.py
+        # The uv sync inside is the only network step; the tests and the coverage gate run offline.
+        shell: bash
+        run: bash scripts/test-story.sh
+
       - name: Check external links
         # Third-party sites: a dead link warns and does not block. A failing job
         # would stall Renovate automerge and the delivery-doc generator.

@@ -1,0 +1,10 @@
+# The test environment for scripts/test-story.sh, not a package: uv sync installs
+# coverage.py from uv.lock, and nothing is built or installed from this directory.
+[project]
+name = "story-tests"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["coverage==7.17.5"]
+
+[tool.uv]
+package = false
